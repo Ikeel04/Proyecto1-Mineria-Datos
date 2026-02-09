@@ -54,6 +54,36 @@ divorcios <- divorcios %>%
 
 ```
 
+```{r semilla-reproducibilidad}
+# Semilla fija para garantizar replicabilidad de muestreos (Shapiro-Wilk)
+# y de algoritmos estocásticos (K-means) en todo el documento.
+set.seed(123)
+```
+
+```{r verificacion-post-carga}
+# Verificación de integridad antes de cualquier inferencia (buenas prácticas EDA).
+vars_num <- names(divorcios)[sapply(divorcios, is.numeric)]
+n_na <- as.integer(divorcios %>% select(all_of(vars_num)) %>% summarise(across(everything(), ~ sum(is.na(.x))))[1, ])
+tabla_verif <- data.frame(
+  variable = vars_num,
+  n_NA = n_na,
+  min = sapply(divorcios[vars_num], min, na.rm = TRUE),
+  max = sapply(divorcios[vars_num], max, na.rm = TRUE)
+)
+# Detección de edades fuera de rango plausible [18, 100]
+fuera_rango_edad <- divorcios %>%
+  summarise(
+    edadhom_fuera = sum(!is.na(edadhom) & (edadhom < 18 | edadhom > 100)),
+    edadmuj_fuera = sum(!is.na(edadmuj) & (edadmuj < 18 | edadmuj > 100))
+  )
+n_duplicados <- sum(duplicated(divorcios))
+knitr::kable(tabla_verif, caption = "Verificación post-carga: valores faltantes y rangos por variable numérica")
+cat("\nFilas duplicadas:", n_duplicados, "\n")
+cat("Edad hombre fuera de [18, 100]:", fuera_rango_edad$edadhom_fuera, "| Edad mujer fuera de [18, 100]:", fuera_rango_edad$edadmuj_fuera, "\n")
+```
+
+La verificación de integridad de los datos es un requisito previo a cualquier inferencia o modelado. El resumen anterior permite detectar valores faltantes, rangos inverosímiles y duplicados. La fijación de una semilla única al inicio del análisis asegura que todos los resultados que dependen de aleatoriedad (muestreos, K-means) sean reproducibles por cualquier revisor o replicador del estudio.
+
 ```{r variables numericas}
 numericas <- sapply(divorcios, is.numeric)
 names(divorcios)[numericas]
@@ -75,8 +105,6 @@ lapply(names(edades), function(v) {
        col = "lightblue")
 })
 
-set.seed(123)
-
 lapply(edades, function(x) {
   shapiro.test(sample(x[!is.na(x)], 5000))
 })
@@ -91,52 +119,6 @@ El análisis gráfico mediante histogramas y la comparación entre media y media
 
 ```{r}
 names(divorcios)
-```
-
-
-```{r}
-library(ggplot2)
-
-nacimientos <- nacimientos %>%
-  mutate(
-    edad_madre = as.numeric(edadm),
-    edad_padre = as.numeric(edadp),
-    peso_libras = as.numeric(libras),
-    hijos_vivos = as.numeric(tohivi)
-  )
-
-```
-
-
-```{r}
-ggplot(nacimientos, aes(x = edad_madre)) +
-  geom_histogram(bins = 30) +
-  labs(
-    title = "Distribución de la edad de la madre",
-    x = "Edad de la madre",
-    y = "Frecuencia"
-  )
-```
-
-```{r}
-ggplot(nacimientos, aes(x = factor(hijos_vivos), y = edad_madre)) +
-  geom_boxplot() +
-  labs(
-    title = "Edad de la madre según el número de hijos vivos",
-    x = "Número de hijos vivos",
-    y = "Edad de la madre"
-  )
-```
-
-```{r}
-ggplot(nacimientos, aes(x = edad_madre, y = peso_libras)) +
-  geom_point(alpha = 0.3) +
-  labs(
-    title = "Relación entre la edad de la madre y el peso del recién nacido",
-    x = "Edad de la madre",
-    y = "Peso del recién nacido (libras)"
-  )
-
 ```
 
 ## Variables categóricas
