@@ -1,0 +1,58 @@
+---
+title: "Proyecto_Mineria"
+author: "Alejandro Anton"
+date: "2026-02-09"
+output: html_document
+---
+
+library(haven)
+library(dplyr)
+library(purrr)
+
+# Definir directorio de trabajo
+setwd("C:/Users/aleja/Downloads/Proyecto_Mineria")
+
+# Listar archivos .sav
+archivos <- list.files(pattern = "\\.sav$")
+
+# Unir todos los archivos en un solo dataset
+datos_nacimientos <- map2_df(
+  archivos,
+  archivos,
+  ~ read_sav(.x) %>%
+    mutate(ANIO = as.numeric(gsub("\\D", "", .y)))
+)
+
+# Verificar estructura
+glimpse(datos_nacimientos)
+
+tabla_sexo <- datos_nacimientos %>%
+  count(SEXO) %>%
+  mutate(
+    Frecuencia = n,
+    Frecuencia_relativa = n / sum(n),
+    Porcentaje = Frecuencia_relativa * 100
+  ) %>%
+  select(SEXO, Frecuencia, Frecuencia_relativa, Porcentaje)
+
+tabla_sexo
+
+
+tabla_departamento <- datos_nacimientos %>%
+  count(DEPOCU) %>%
+  arrange(desc(n))
+
+tabla_departamento
+
+
+tabla_anio_dep <- datos_nacimientos %>%
+  count(ANIO, DEPOCU) %>%
+  group_by(ANIO) %>%
+  mutate(Porcentaje = n / sum(n) * 100)
+
+tabla_anio_dep
+
+
+
+
+
