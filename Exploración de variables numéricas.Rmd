@@ -83,6 +83,9 @@ Para la edad de los hombres se obtuvo un estadístico W = 0.9217 con p < 0.05, m
 El análisis gráfico mediante histogramas y la comparación entre media y mediana evidencian que ambas variables presentan asimetría positiva (sesgo hacia la derecha), caracterizada por una mayor concentración de observaciones en edades medias y una cola extendida hacia edades más altas.
 
 
+```{r}
+names(divorcios)
+```
 
 
 ```{r}
@@ -130,7 +133,40 @@ ggplot(nacimientos, aes(x = edad_madre, y = peso_libras)) +
 
 ```
 
+```{r}
+# Convertir variables a numéricas
+divorcios <- divorcios %>%
+  mutate(
+    edad_hombre = as.numeric(edadhom),
+    edad_mujer  = as.numeric(edadmuj),
+    esc_hombre  = as.numeric(eschom),
+    esc_mujer   = as.numeric(escmuj)
+  )
 
+# Dataset para correlación
+datos_cor <- divorcios %>%
+  select(
+    edad_hombre,
+    edad_mujer,
+    esc_hombre,
+    esc_mujer
+  ) %>%
+  tidyr::drop_na()
+
+
+# Matriz de correlación
+matriz_cor <- cor(
+  datos_cor,
+  method = "pearson",
+  use = "complete.obs"
+)
+
+# Tabla de correlación
+knitr::kable(
+  round(matriz_cor, 3),
+  caption = "Matriz de correlación de divorcios en Guatemala"
+)
+```
 
 
 
