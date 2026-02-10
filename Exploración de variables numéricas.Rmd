@@ -4,37 +4,86 @@ author: "Alejandro Anton"
 date: "2026-02-09"
 output: html_document
 ---
-
-```{r}
+```{r librerias}
 library(haven)
 library(dplyr)
 library(purrr)
 library(janitor)
 library(stringr)
+library(readr)
+```
 
-# Asegúrate de que aquí estén los .sav
-archivos <- list.files("C:/Users/aleja/Downloads/Proyecto_Mineria", pattern = "\\.sav$", full.names = TRUE)
 
-# Concatenar de forma robusta
-nacimientos <- map_df(
-  archivos,
-  ~ read_sav(.x) %>%
-    
-    # Quitar etiquetas SPSS
+```{r leer y corregir datos}
+archivos <- list.files("./datos/", pattern = "\\.sav$", full.names = TRUE)
+
+nacimientos <- map_df(archivos, function(x) {
+  
+  df <- read_sav(x, user_na = TRUE) %>% 
     zap_labels() %>%
-    
-    # Estandarizar nombres
-    clean_names() %>%
-    
-    # Convertir TODO a character (clave)
-    mutate(across(everything(), as.character)) %>%
-    
-    # Agregar año desde el nombre del archivo
-    mutate(anio = str_extract(.x, "\\d{4}"))
-)
+    clean_names()
 
+  df[] <- lapply(df, as.character)
+  
+  df$anio <- str_extract(basename(x), "\\d{4}")
+  
+  return(df)
+})
+
+nacimientos <- nacimientos %>%
+  mutate(across(
+    everything(),
+    ~ type.convert(.x, as.is = TRUE)
+  ))
+
+nacimientos$anio <- as.integer(nacimientos$anio)
+
+divorcios <- nacimientos
+
+divorcios <- divorcios %>%
+  mutate(
+    edadhom = na_if(edadhom, 999),
+    edadmuj = na_if(edadmuj, 999)
+  )
 
 ```
+
+```{r variables numericas}
+numericas <- sapply(divorcios, is.numeric)
+names(divorcios)[numericas]
+
+edades <- divorcios %>%
+  select(edadhom, edadmuj)
+
+```
+```{r resumen numericas}
+summary(edades)
+
+sapply(edades, mean, na.rm = TRUE)
+sapply(edades, sd, na.rm = TRUE)
+
+lapply(names(edades), function(v) {
+  hist(edades[[v]],
+       main = paste("Distribución", v),
+       xlab = "Edad",
+       col = "lightblue")
+})
+
+set.seed(123)
+
+lapply(edades, function(x) {
+  shapiro.test(sample(x[!is.na(x)], 5000))
+})
+
+```
+Se evaluó la normalidad de las variables edad del hombre y edad de la mujer mediante la prueba de Shapiro-Wilk.
+
+Para la edad de los hombres se obtuvo un estadístico W = 0.9217 con p < 0.05, mientras que para la edad de las mujeres W = 0.9292 con p < 0.05. En ambos casos se rechaza la hipótesis nula de normalidad, concluyendo que las variables no siguen una distribución normal.
+
+El análisis gráfico mediante histogramas y la comparación entre media y mediana evidencian que ambas variables presentan asimetría positiva (sesgo hacia la derecha), caracterizada por una mayor concentración de observaciones en edades medias y una cola extendida hacia edades más altas.
+
+
+
 
 ```{r}
 library(ggplot2)
