@@ -1,0 +1,89 @@
+---
+title: "Proyecto_Mineria"
+author: "Alejandro Anton"
+date: "2026-02-09"
+output: html_document
+---
+
+```{r}
+library(haven)
+library(dplyr)
+library(purrr)
+library(janitor)
+library(stringr)
+
+# Asegúrate de que aquí estén los .sav
+archivos <- list.files("C:/Users/aleja/Downloads/Proyecto_Mineria", pattern = "\\.sav$", full.names = TRUE)
+
+# Concatenar de forma robusta
+nacimientos <- map_df(
+  archivos,
+  ~ read_sav(.x) %>%
+    
+    # Quitar etiquetas SPSS
+    zap_labels() %>%
+    
+    # Estandarizar nombres
+    clean_names() %>%
+    
+    # Convertir TODO a character (clave)
+    mutate(across(everything(), as.character)) %>%
+    
+    # Agregar año desde el nombre del archivo
+    mutate(anio = str_extract(.x, "\\d{4}"))
+)
+
+
+```
+
+```{r}
+library(ggplot2)
+
+nacimientos <- nacimientos %>%
+  mutate(
+    edad_madre = as.numeric(edadm),
+    edad_padre = as.numeric(edadp),
+    peso_libras = as.numeric(libras),
+    hijos_vivos = as.numeric(tohivi)
+  )
+
+```
+
+
+```{r}
+ggplot(nacimientos, aes(x = edad_madre)) +
+  geom_histogram(bins = 30) +
+  labs(
+    title = "Distribución de la edad de la madre",
+    x = "Edad de la madre",
+    y = "Frecuencia"
+  )
+```
+
+```{r}
+ggplot(nacimientos, aes(x = factor(hijos_vivos), y = edad_madre)) +
+  geom_boxplot() +
+  labs(
+    title = "Edad de la madre según el número de hijos vivos",
+    x = "Número de hijos vivos",
+    y = "Edad de la madre"
+  )
+```
+
+```{r}
+ggplot(nacimientos, aes(x = edad_madre, y = peso_libras)) +
+  geom_point(alpha = 0.3) +
+  labs(
+    title = "Relación entre la edad de la madre y el peso del recién nacido",
+    x = "Edad de la madre",
+    y = "Peso del recién nacido (libras)"
+  )
+
+```
+
+
+
+
+
+
+
