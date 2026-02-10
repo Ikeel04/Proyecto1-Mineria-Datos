@@ -1,6 +1,6 @@
 ---
 title: "Proyecto_Mineria"
-author: "Alejandro Anton"
+author: "Alejandro Anton, Adrián González, Jose Ordoñez, Daniela Ramírez"
 date: "2026-02-09"
 output: html_document
 ---
@@ -132,6 +132,75 @@ ggplot(nacimientos, aes(x = edad_madre, y = peso_libras)) +
   )
 
 ```
+
+## Variables categóricas
+```{r Conversión factor}
+# Nominales
+divorcios$depreg  <- factor(divorcios$depreg)
+divorcios$mupreg  <- factor(divorcios$mupreg)
+```
+
+```{r}
+# Mes como ordinal
+niveles_meses <- c(
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+)
+
+divorcios$mesreg <- factor(
+  divorcios$mesreg,
+  levels = niveles_meses,
+  ordered = TRUE
+)
+```
+
+```{r Tablas de frecuencia}
+tabla_frecuencia <- function(variable) {
+  freq_abs <- table(variable, useNA = "ifany")
+  freq_rel <- prop.table(freq_abs)
+
+  data.frame(
+    Categoria = names(freq_abs),
+    Frecuencia = as.numeric(freq_abs),
+    Proporcion = round(as.numeric(freq_rel), 4)
+  )
+}
+```
+
+# Departamento de registro
+```{r}
+divorcios %>%
+  count(depreg, sort = TRUE)
+```
+
+# Municipio de registro (top 10)
+```{r}
+divorcios %>%
+  count(mupreg, sort = TRUE) %>%
+  head(10)
+```
+
+
+# Año de registro
+```{r}
+divorcios %>%
+  count(anio)
+```
+
+
+# Grupo étnico del hombre
+```{r}
+divorcios %>%
+  count(grethom, sort = TRUE)
+```
+
+
+# Grupo étnico de la mujer
+```{r}
+divorcios %>%
+  count(gretmuj, sort = TRUE)
+```
+
 
 ```{r}
 # Convertir variables a numéricas
