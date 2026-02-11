@@ -98,6 +98,33 @@ summary(edades)
 sapply(edades, mean, na.rm = TRUE)
 sapply(edades, sd, na.rm = TRUE)
 
+# Coeficientes de asimetría y curtosis (fórmula muestral)
+skewness_muestral <- function(x) {
+  x <- x[!is.na(x)]
+  n <- length(x)
+  m <- mean(x)
+  s <- sd(x)
+  if (s == 0) return(NA)
+  (sum((x - m)^3) / n) / (s^3)
+}
+kurtosis_muestral <- function(x) {
+  x <- x[!is.na(x)]
+  n <- length(x)
+  m <- mean(x)
+  s <- sd(x)
+  if (s == 0) return(NA)
+  (sum((x - m)^4) / n) / (s^4) - 3
+}
+tabla_forma <- data.frame(
+  variable = names(edades),
+  media = sapply(edades, mean, na.rm = TRUE),
+  mediana = sapply(edades, median, na.rm = TRUE),
+  sd = sapply(edades, sd, na.rm = TRUE),
+  asimetria = sapply(edades, skewness_muestral),
+  curtosis = sapply(edades, kurtosis_muestral)
+)
+knitr::kable(round(tabla_forma, 4), caption = "Resumen de forma: media, mediana, desv. típica, asimetría y curtosis")
+
 lapply(names(edades), function(v) {
   hist(edades[[v]],
        main = paste("Distribución", v),
@@ -108,13 +135,26 @@ lapply(names(edades), function(v) {
 lapply(edades, function(x) {
   shapiro.test(sample(x[!is.na(x)], 5000))
 })
-
 ```
-Se evaluó la normalidad de las variables edad del hombre y edad de la mujer mediante la prueba de Shapiro-Wilk.
 
-Para la edad de los hombres se obtuvo un estadístico W = 0.9217 con p < 0.05, mientras que para la edad de las mujeres W = 0.9292 con p < 0.05. En ambos casos se rechaza la hipótesis nula de normalidad, concluyendo que las variables no siguen una distribución normal.
+```{r ic-medias-edad}
+# Intervalos de confianza 95% para la media de cada edad
+ic_edadhom <- t.test(divorcios$edadhom, conf.level = 0.95)
+ic_edadmuj <- t.test(divorcios$edadmuj, conf.level = 0.95)
+tabla_ic <- data.frame(
+  variable = c("edadhom", "edadmuj"),
+  media_est = c(ic_edadhom$estimate, ic_edadmuj$estimate),
+  ic_inf = c(ic_edadhom$conf.int[1], ic_edadmuj$conf.int[1]),
+  ic_sup = c(ic_edadhom$conf.int[2], ic_edadmuj$conf.int[2])
+)
+knitr::kable(round(tabla_ic, 3), caption = "IC 95% para la media de edad")
+```
 
-El análisis gráfico mediante histogramas y la comparación entre media y mediana evidencian que ambas variables presentan asimetría positiva (sesgo hacia la derecha), caracterizada por una mayor concentración de observaciones en edades medias y una cola extendida hacia edades más altas.
+Se evaluó la normalidad de las variables edad del hombre y edad de la mujer mediante la prueba de Shapiro-Wilk. Para la edad de los hombres se obtuvo un estadístico W = 0.9217 con p < 0.05, mientras que para la edad de las mujeres W = 0.9292 con p < 0.05. En ambos casos se rechaza la hipótesis nula de normalidad, concluyendo que las variables no siguen una distribución normal. *Con muestras grandes, la prueba de Shapiro-Wilk es muy sensible a desviaciones pequeñas de la normalidad; por ello el rechazo debe complementarse con la magnitud del efecto (asimetría y curtosis) y con el análisis gráfico, no solo con el p-valor.*
+
+El análisis gráfico mediante histogramas y la comparación entre media y mediana evidencian que ambas variables presentan asimetría positiva (sesgo hacia la derecha), caracterizada por una mayor concentración de observaciones en edades medias y una cola extendida hacia edades más altas. La asimetría y la curtosis reportadas en la tabla refuerzan esta lectura: valores positivos de asimetría indican cola derecha, y la curtosis informa sobre el peso de las colas respecto a una normal. Ante el rechazo de normalidad y la asimetría observada, las comparaciones o inferencias posteriores deberían apoyarse en métodos no paramétricos o robustos cuando sea pertinente.
+
+En contexto demográfico, la concentración en edades medias (aproximadamente 25–40 años) es coherente con la etapa del ciclo vital en que más se formalizan divorcios (población en edad laboral y reproductiva), mientras que la cola hacia edades mayores refleja divorcios en etapas tardías. Los intervalos de confianza para la media (tabla anterior) cuantifican la incertidumbre de las estimaciones: la media de la edad del hombre y de la mujer en la población de divorcios queda acotada por los respectivos IC 95%.
 
 
 ```{r}
