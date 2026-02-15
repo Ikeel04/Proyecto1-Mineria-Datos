@@ -265,6 +265,32 @@ knitr::kable(
 )
 ```
 
+```{r scatter-correlacion}
+# Verificación gráfica de linealidad y homocedasticidad para los pares de la matriz.
+datos_scatter <- divorcios %>%
+  select(edadhom, edadmuj, eschom, escmuj) %>%
+  tidyr::drop_na()
+# Edad hombre vs mujer
+ggplot(datos_scatter, aes(x = edadhom, y = edadmuj)) +
+  geom_point(alpha = 0.15) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkblue") +
+  labs(title = "Edad del hombre vs. edad de la mujer", x = "Edad hombre", y = "Edad mujer") +
+  theme_minimal()
+# Edad vs escolaridad (hombre)
+ggplot(datos_scatter, aes(x = edadhom, y = eschom)) +
+  geom_point(alpha = 0.15) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkgreen") +
+  labs(title = "Edad del hombre vs. escolaridad del hombre", x = "Edad hombre", y = "Escolaridad") +
+  theme_minimal()
+# Edad vs escolaridad (mujer)
+ggplot(datos_scatter, aes(x = edadmuj, y = escmuj)) +
+  geom_point(alpha = 0.15) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkred") +
+  labs(title = "Edad de la mujer vs. escolaridad de la mujer", x = "Edad mujer", y = "Escolaridad") +
+  theme_minimal()
+```
+
+Según criterios de magnitud habituales (p. ej. Cohen: bajo |r| < 0.3, moderado 0.3–0.5, alto > 0.5), las correlaciones de la matriz pueden clasificarse para interpretar la fuerza de la asociación lineal. Los diagramas de dispersión con línea de tendencia y banda de confianza permiten valorar de forma visual el supuesto de linealidad y la homocedasticidad aproximada de los residuos. *Importante:* la correlación no implica causalidad. Las asociaciones observadas pueden estar confundidas por edad, cohorte o contexto institucional; las conclusiones se limitan a asociaciones en el registro de divorcios analizado y no a efectos causales.
 
 ## Validación de supuestos
 ```{r}
@@ -300,7 +326,7 @@ ggplot(tabla_anio, aes(x = anio, y = n)) +
 # Supuesto 3 y 4: Correlaciones entre edades y escolaridad
 
 datos_corr <- divorcios %>%
-  select(edadhom, edadmuj, escohom, escomuj) %>%
+  select(edadhom, edadmuj, eschom, escmuj) %>%
   na.omit()
 
 matriz_cor <- cor(datos_corr)
@@ -309,11 +335,11 @@ print(matriz_cor)
 
 # Supuesto 5: Relación entre edad y escolaridad
 
-cor_edad_escohom <- matriz_cor["edadhom", "escohom"]
-cor_edad_escomuj <- matriz_cor["edadmuj", "escomuj"]
+cor_edad_eschom <- matriz_cor["edadhom", "eschom"]
+cor_edad_escmuj <- matriz_cor["edadmuj", "escmuj"]
 
-cat("Correlación edad_hombre - escolaridad_hombre:", cor_edad_escohom, "\n")
-cat("Correlación edad_mujer - escolaridad_mujer:", cor_edad_escomuj, "\n")
+cat("Correlación edad_hombre - escolaridad_hombre:", cor_edad_eschom, "\n")
+cat("Correlación edad_mujer - escolaridad_mujer:", cor_edad_escmuj, "\n")
 
 
 ```
@@ -363,7 +389,7 @@ El gráfico de los diez departamentos con mayor número de divorcios evidencia u
 ```{r}
 # Preparación de datos
 datos_cluster <- divorcios %>%
-  select(edadhom, edadmuj, escohom, escomuj) %>%
+  select(edadhom, edadmuj, eschom, escmuj) %>%
   na.omit()
 
 datos_scaled <- scale(datos_cluster)
