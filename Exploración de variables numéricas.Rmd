@@ -11,13 +11,19 @@ library(purrr)
 library(janitor)
 library(stringr)
 library(readr)
+library(ggplot2)
+library(cluster)
 ```
 
 
 ```{r leer y corregir datos}
-archivos <- list.files("./datos/", pattern = "\\.sav$", full.names = TRUE)
+archivos <- list.files(
+  "./datos/",
+  pattern = "divorcios.*\\.sav$",
+  full.names = TRUE
+)
 
-nacimientos <- map_df(archivos, function(x) {
+divorcios <- map_df(archivos, function(x) {
   
   df <- read_sav(x, user_na = TRUE) %>% 
     zap_labels() %>%
@@ -30,16 +36,16 @@ nacimientos <- map_df(archivos, function(x) {
   return(df)
 })
 
-nacimientos <- nacimientos %>%
+# Convertir tipos correctamente
+divorcios <- divorcios %>%
   mutate(across(
     everything(),
     ~ type.convert(.x, as.is = TRUE)
   ))
 
-nacimientos$anio <- as.integer(nacimientos$anio)
+divorcios$anio <- as.integer(divorcios$anio)
 
-divorcios <- nacimientos
-
+# Reemplazar valores perdidos codificados
 divorcios <- divorcios %>%
   mutate(
     edadhom = na_if(edadhom, 999),
@@ -238,6 +244,139 @@ knitr::kable(
 ```
 
 
+## Validación de supuestos
+```{r}
+# Supuesto 1: Concentración en el departamento de Guatemala
 
+tabla_departamento <- divorcios %>%
+  count(depreg, sort = TRUE)
+
+# Mostrar todos los departamentos
+print(tabla_departamento, n = nrow(tabla_departamento))
+
+
+# Supuesto 2: Tendencia creciente en divorcios
+
+tabla_anio <- divorcios %>%
+  count(anio) %>%
+  arrange(anio)
+
+print(tabla_anio)
+
+# Convertir año a factor para gráfico 
+tabla_anio$anio <- factor(tabla_anio$anio)
+
+ggplot(tabla_anio, aes(x = anio, y = n)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = n), vjust = -0.3, size = 3) +
+  labs(title = "Divorcios por año (2010–2019)",
+       x = "Año",
+       y = "Frecuencia") +
+  theme_minimal()
+
+
+# Supuesto 3 y 4: Correlaciones entre edades y escolaridad
+
+datos_corr <- divorcios %>%
+  select(edadhom, edadmuj, escohom, escomuj) %>%
+  na.omit()
+
+matriz_cor <- cor(datos_corr)
+
+print(matriz_cor)
+
+# Supuesto 5: Relación entre edad y escolaridad
+
+cor_edad_escohom <- matriz_cor["edadhom", "escohom"]
+cor_edad_escomuj <- matriz_cor["edadmuj", "escomuj"]
+
+cat("Correlación edad_hombre - escolaridad_hombre:", cor_edad_escohom, "\n")
+cat("Correlación edad_mujer - escolaridad_mujer:", cor_edad_escomuj, "\n")
+
+
+```
+El análisis permitió confirmar algunos supuestos iniciales (concentración geográfica, tendencia creciente y similitud entre cónyuges) y refutar otros (relación entre edad y escolaridad). Esto demuestra que, aunque ciertas intuiciones iniciales se sostienen con los datos, otras no encuentran respaldo empírico.
+
+La validación explícita de cada supuesto permitió que los datos guiaran las conclusiones, cumpliendo con el enfoque exploratorio requerido.
+
+## Gráficos exploratorios
+```{r}
+# Histograma edad hombre
+ggplot(divorcios %>% filter(!is.na(edadhom)), 
+       aes(x = edadhom)) +
+  geom_histogram(fill = "darkgreen", bins = 30) +
+  labs(title = "Distribución de edad del hombre",
+       x = "Edad",
+       y = "Frecuencia") +
+  theme_minimal()
+
+# Histograma edad mujer
+ggplot(divorcios %>% filter(!is.na(edadmuj)), 
+       aes(x = edadmuj)) +
+  geom_histogram(fill = "purple", bins = 30) +
+  labs(title = "Distribución de edad de la mujer",
+       x = "Edad",
+       y = "Frecuencia") +
+  theme_minimal()
+
+# Top 10 departamentos
+divorcios %>%
+  count(depreg, sort = TRUE) %>%
+  head(10) %>%
+  ggplot(aes(x = reorder(depreg, n), y = n)) +
+  geom_col(fill = "darkred") +
+  geom_text(aes(label = n), hjust = -0.2, size = 3) +
+  coord_flip() +
+  labs(title = "Top 10 departamentos con más divorcios",
+       x = "Departamento",
+       y = "Frecuencia") +
+  theme_minimal()
+
+```
+Los histogramas de edad del hombre y de la mujer muestran una distribución asimétrica positiva, con mayor concentración entre los 25 y 40 años y una cola extendida hacia edades mayores. Este patrón confirma los resultados obtenidos mediante la prueba de Shapiro-Wilk, donde se rechazó la normalidad.
+
+El gráfico de los diez departamentos con mayor número de divorcios evidencia una fuerte concentración territorial. El departamento de Guatemala supera ampliamente al resto, lo cual refuerza el supuesto de centralización del fenómeno.
+
+## f) Clustering
+```{r}
+# Preparación de datos
+datos_cluster <- divorcios %>%
+  select(edadhom, edadmuj, escohom, escomuj) %>%
+  na.omit()
+
+datos_scaled <- scale(datos_cluster)
+
+# Método del codo
+wss <- sapply(1:6, function(k){
+  kmeans(datos_scaled, centers = k, nstart = 10)$tot.withinss
+})
+
+plot(1:6, wss, type = "b",
+     xlab = "Número de clusters",
+     ylab = "Suma de cuadrados intra-cluster",
+     main = "Método del codo")
+
+# Aplicación K-means
+set.seed(123)
+modelo_kmeans <- kmeans(datos_scaled, centers = 3, nstart = 25)
+
+datos_cluster$cluster <- modelo_kmeans$cluster
+
+# Evaluación con silhouette
+sil <- silhouette(modelo_kmeans$cluster, dist(datos_scaled))
+print(mean(sil[, 3]))
+
+# Resumen por cluster
+resumen_cluster <- datos_cluster %>%
+  group_by(cluster) %>%
+  summarise(across(everything(), mean))
+
+print(resumen_cluster)
+```
+Se aplicó el algoritmo K-means utilizando como variables la edad del hombre, la edad de la mujer y el nivel educativo de ambos cónyuges. Previamente, las variables fueron estandarizadas para evitar sesgos por diferencias de escala.
+
+El método del codo indicó que tres clusters constituyen una solución adecuada, ya que a partir de k = 3 la reducción de la suma de cuadrados cluster se estabiliza.
+
+El coeficiente promedio de silhouette fue 0.38, lo cual indica una separación moderada entre los grupos.
 
 
