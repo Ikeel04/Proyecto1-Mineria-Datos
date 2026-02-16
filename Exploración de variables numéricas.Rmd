@@ -386,6 +386,9 @@ Los histogramas de edad del hombre y de la mujer muestran una distribución asim
 El gráfico de los diez departamentos con mayor número de divorcios evidencia una fuerte concentración territorial. El departamento de Guatemala supera ampliamente al resto, lo cual refuerza el supuesto de centralización del fenómeno.
 
 ## f) Clustering
+
+Se utiliza K-means sobre variables estandarizadas (edad del hombre y de la mujer, escolaridad de ambos) porque las escalas son distintas y la distancia euclidiana sería dominada por la variable con mayor varianza si no se estandariza. La distancia euclidiana y K-means se eligen por su interpretabilidad y por el tamaño muestral; se asume que los grupos tienen forma aproximadamente esférica. Limitaciones: K-means es sensible a outliers y a clusters no esféricos; los resultados son descriptivos y no inferenciales.
+
 ```{r}
 # Preparación de datos
 datos_cluster <- divorcios %>%
@@ -410,21 +413,27 @@ modelo_kmeans <- kmeans(datos_scaled, centers = 3, nstart = 25)
 
 datos_cluster$cluster <- modelo_kmeans$cluster
 
-# Evaluación con silhouette
+# Evaluación con silhouette: media global y por cluster
 sil <- silhouette(modelo_kmeans$cluster, dist(datos_scaled))
-print(mean(sil[, 3]))
+sil_por_cluster <- datos_cluster %>%
+  mutate(sil_width = sil[, 3]) %>%
+  group_by(cluster) %>%
+  summarise(silhouette_promedio = mean(sil_width, na.rm = TRUE), n = n())
+knitr::kable(sil_por_cluster, caption = "Coeficiente de silhouette promedio por cluster")
+cat("Silhouette global:", round(mean(sil[, 3]), 4), "\n")
+plot(sil, main = "Perfil de silhouette por cluster")
 
 # Resumen por cluster
 resumen_cluster <- datos_cluster %>%
   group_by(cluster) %>%
-  summarise(across(everything(), mean))
+  summarise(across(c(edadhom, edadmuj, eschom, escmuj), mean))
 
 print(resumen_cluster)
 ```
 Se aplicó el algoritmo K-means utilizando como variables la edad del hombre, la edad de la mujer y el nivel educativo de ambos cónyuges. Previamente, las variables fueron estandarizadas para evitar sesgos por diferencias de escala.
 
-El método del codo indicó que tres clusters constituyen una solución adecuada, ya que a partir de k = 3 la reducción de la suma de cuadrados cluster se estabiliza.
+El método del codo indicó que tres clusters constituyen una solución adecuada: a partir de k = 3 la reducción de la suma de cuadrados intra-cluster (WSS) se estabiliza, por lo que aumentar el número de grupos no aporta mejora sustancial. El coeficiente promedio de silhouette (aprox. 0.38) indica una separación moderada entre los grupos, coherente con el solapamiento esperable en variables sociodemográficas como edad y escolaridad.
 
-El coeficiente promedio de silhouette fue 0.38, lo cual indica una separación moderada entre los grupos.
+Los perfiles de cluster (medias en la tabla) pueden etiquetarse de forma conceptual según edad y escolaridad: por ejemplo, grupos de parejas más jóvenes con menor escolaridad, parejas de edades medias con escolaridad intermedia, y parejas de mayor edad y/o mayor escolaridad. Estas categorías son útiles para describir patrones en el registro de divorcios; cualquier implicación para políticas o demografía requeriría análisis adicional y validación externa.
 
 
