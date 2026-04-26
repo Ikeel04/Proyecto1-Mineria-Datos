@@ -1,0 +1,124 @@
+---
+title: "Proyecto 1 – Avances 3"
+author: "Daniela Ramírez, Jose Ordoñez, Alejandro Antón, Adrián González, Luis Mendoza"
+date: "2026-04-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+
+
+## Librerías
+
+```{r librerias}
+library(haven)
+library(dplyr)
+library(purrr)
+library(janitor)
+library(stringr)
+library(ggplot2)
+library(caret)
+library(randomForest)
+library(tidyr)
+library(scales)
+library(kableExtra)
+```
+
+## Carga y preprocesamiento de datos
+
+```{r carga-datos}
+archivos <- list.files("./datos/", pattern = "divorcios.*\\.sav$", full.names = TRUE)
+
+divorcios <- map_df(archivos, function(x) {
+  df <- read_sav(x, user_na = TRUE) %>%
+    zap_labels() %>%
+    clean_names()
+  df[] <- lapply(df, as.character)
+  df$anio <- str_extract(basename(x), "\\d{4}")
+  return(df)
+})
+
+divorcios <- divorcios %>%
+  mutate(across(everything(), ~ type.convert(.x, as.is = TRUE)))
+
+divorcios$anio <- as.integer(divorcios$anio)
+
+divorcios <- divorcios %>%
+  mutate(
+    edadhom = na_if(edadhom, 999),
+    edadmuj = na_if(edadmuj, 999)
+  )
+
+cat("Total de registros cargados:", nrow(divorcios), "\n")
+```
+
+## Variable respuesta: diferencia de edad entre cónyuges
+
+La variable respuesta del presente análisis es diff_edad_cat, derivada de la diferencia absoluta entre la edad del hombre (edadhom) y la edad de la mujer (edadmuj) al momento del divorcio. Su construcción responde a la hipótesis de que la brecha etaria entre cónyuges puede estar asociada a dinámicas relacionales que influyen en la estabilidad del matrimonio.
+
+La discretización en tres categorías se definió con base en el análisis exploratorio previo, buscando clases relativamente balanceadas:
+
+- **Similar**: diferencia menor o igual a 2 años
+- **Moderada**: diferencia entre 3 y 5 años
+- **Alta**: diferencia mayor a 5 años
+
+```{r variable respuesta}
+divorcios <- divorcios %>%
+  filter(!is.na(edadhom), !is.na(edadmuj)) %>%
+  mutate(
+    diff_edad     = abs(edadhom - edadmuj),
+    diff_edad_cat = case_when(
+      diff_edad <= 2                  ~ "Similar",
+      diff_edad >= 3 & diff_edad <= 5 ~ "Moderada",
+      diff_edad > 5                   ~ "Alta"
+    ),
+    diff_edad_cat = factor(diff_edad_cat,
+                           levels = c("Similar", "Moderada", "Alta"))
+  )
+
+dist_resp <- prop.table(table(divorcios$diff_edad_cat)) * 100
+cat("Distribucion de diff_edad_cat:\n")
+print(round(dist_resp, 2))
+```
+
+```{r grafico variable respuesta}
+dist_df <- as.data.frame(dist_resp)
+names(dist_df) <- c("Categoria", "Porcentaje")
+
+ggplot(dist_df, aes(x = Categoria, y = Porcentaje, fill = Categoria)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = paste0(round(Porcentaje, 1), "%")), vjust = -0.5, size = 4.5) +
+  scale_fill_manual(values = c("Similar"  = "#2ecc71",
+                               "Moderada" = "#f39c12",
+                               "Alta"     = "#e74c3c")) +
+  labs(title = "Distribucion de la variable respuesta - Diferencia de edad",
+       x = "Categoria", y = "Porcentaje (%)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+La variable diff_edad_cat presenta una distribución relativamente balanceada entre sus tres categorías: Similar concentra el 39.1% de los divorcios, mientras que Moderada y Alta representan el 30.6% y 30.3% respectivamente. Aunque la clase Similar tiene una ligera mayoría, la diferencia no es lo suficientemente pronunciada como para requerir técnicas de balanceo como SMOTE. Esto favorece el entrenamiento de los modelos de clasificación sin sesgo hacia una clase dominante. El hecho de que casi 4 de cada 10 parejas divorciadas en Guatemala tengan edades muy similares sugiere que la homogamia etaria es el patrón más común en las disoluciones matrimoniales del período analizado.
+
+```{r atipicos-diff-edad}
+boxplot_data <- divorcios %>% filter(!is.na(diff_edad))
+
+ggplot(boxplot_data, aes(y = diff_edad)) +
+  geom_boxplot(fill = "#3498db", alpha = 0.7, outlier.color = "#e74c3c",
+               outlier.size = 1.5) +
+  labs(title = "Distribucion de la diferencia de edad (variable continua)",
+       y = "Diferencia de edad (anios)") +
+  theme_minimal()
+
+q1  <- quantile(boxplot_data$diff_edad, 0.25)
+q3  <- quantile(boxplot_data$diff_edad, 0.75)
+iqr <- q3 - q1
+atipicos <- sum(boxplot_data$diff_edad > q3 + 1.5 * iqr)
+
+cat("Q1:", q1, "| Q3:", q3, "| IQR:", iqr, "\n")
+cat("Limite superior (Q3 + 1.5*IQR):", q3 + 1.5 * iqr, "\n")
+cat("Numero de atipicos:", atipicos, "\n")
+cat("Porcentaje de atipicos:", round(atipicos / nrow(boxplot_data) * 100, 2), "%\n")
+```
+El análisis de la variable continua subyacente muestra que la diferencia de edad entre cónyuges tiene una mediana de 3 años (Q1=1, Q3=6, IQR=5), con un límite superior de 13.5 años según el criterio de Tukey. Se identificaron 1,201 observaciones atípicas, correspondientes a parejas con una brecha etaria superior a 13 años. El caso extremo registrado alcanza los 59 años de diferencia. Estos atípicos representan situaciones reales y socialmente relevantes, refiriéndonos a matrimonios con grandes diferencias generacionales, por lo que no se eliminan, sino que quedan capturados en la categoría Alta de la variable respuesta. Random Forest, al ser robusto ante valores extremos, puede manejar estos casos sin necesidad de transformaciones adicionales.
