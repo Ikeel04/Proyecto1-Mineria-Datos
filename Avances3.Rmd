@@ -9,8 +9,6 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
-
-
 ## Librerías
 
 ```{r librerias}
@@ -190,7 +188,7 @@ Las transformaciones realizadas fueron: conversion de todas las variables a tipo
 
 ## Modelos Random Forest
 
-Solo asegurense de explicar el tipo de modelo que están usando: Se pueden entrenar tres modelos variando ntree (numero de arboles) y mtry (variables candidatas por nodo), los dos hiperparametros principales de Random Forest. Podría ser uno base con 100 arboles digamos, otro con aún más arboles y otro que tengo pocos (unos 20 o 50 digamos)
+Se entrenaron tres modelos Random Forest variando los dos hiperparámetros principales del algoritmo: ntree (número de árboles en el bosque) y mtry (número de variables candidatas evaluadas en cada nodo de división). 
 
 ## Modelo Random Forest – Alto número de árboles (ntree = 500)
 
@@ -221,4 +219,174 @@ print(cm_alto)
 importance(rf_alto)
 ```
 El modelo con 700 árboles y mtry=5 logró un accuracy del 89.4% y un Kappa de 0.839, lo que indica que el modelo predice bastante bien las tres categorías. El error OOB fue de 9.5%, casi igual al error en prueba, lo que confirma que no hay sobreajuste. La clase más difícil de predecir fue Moderada, algo esperado porque es la categoría intermedia. Las variables más importantes fueron las edades de ambos cónyuges, seguidas por el departamento de registro.
+
+## Modelo 2 – Random Forest con tuning de mtry via cross-validation (caret)
+
+```{r rf-tuning-cv}
+set.seed(123)
+
+ctrl <- trainControl(
+  method          = "cv",
+  number          = 5,
+  classProbs      = TRUE,
+  summaryFunction = multiClassSummary,
+  savePredictions = "final"
+)
+
+tune_grid <- expand.grid(mtry = 1:6)
+
+rf_tuned <- train(
+  diff_edad_cat ~ .,
+  data      = train,
+  method    = "rf",
+  trControl = ctrl,
+  tuneGrid  = tune_grid,
+  ntree     = 500,
+  metric    = "Accuracy"
+)
+
+print(rf_tuned)
+cat("\nMejor mtry encontrado:", rf_tuned$bestTune$mtry, "\n")
+```
+El CV seleccionó mtry=6 con un accuracy promedio de 89.3%. La tabla muestra que el accuracy crece consistentemente conforme aumenta mtry, lo que indica que en este dataset usar más variables candidatas por nodo mejora la predicción. El AUC también sube de 0.743 (mtry=1) a 0.972 (mtry=6), confirmando que el modelo discrimina bien entre las tres categorías.
+
+```{r rf-tuning-grafico-cv}
+ggplot(rf_tuned) +
+  labs(
+    title = "Selección de mtry por cross-validation (5 folds)",
+    x     = "Número de variables candidatas por nodo (mtry)",
+    y     = "Accuracy (CV)"
+  ) +
+  theme_minimal()
+```
+La curva tiene una pendiente pronunciada entre mtry=1 y mtry=4, y se aplana a partir de mtry=5. La diferencia entre mtry=5 (0.889) y mtry=6 (0.893) es de apenas 0.004, lo que indica que el modelo se estabiliza antes de llegar al máximo. El punto de inflexión real está alrededor de mtry=4.
+
+```{r rf-tuning-evaluacion}
+pred_tuned <- predict(rf_tuned, newdata = test)
+
+cm_tuned <- confusionMatrix(pred_tuned, test$diff_edad_cat)
+print(cm_tuned)
+```
+El modelo obtuvo 91.1% de accuracy y Kappa de 0.866, lo que representa un ajuste excelente para una clasificación de tres clases. La clase Moderada presenta la sensibilidad más baja (88.3%), esperable por ser la categoría intermedia con límites menos definidos. Los errores se concentran entre clases adyacentes, no entre extremos.
+
+```{r rf-tuning-importancia}
+imp_tuned <- varImp(rf_tuned, scale = TRUE)
+print(imp_tuned)
+
+ggplot(imp_tuned, top = 6) +
+  labs(
+    title = "Importancia de variables – RF con tuning (CV)",
+    x     = "Importancia (escala 0-100)"
+  ) +
+  theme_minimal()
+```
+edadmuj (100) y edadhom (92.5) dominan completamente el modelo. El departamento de registro aporta marginalmente (9.7) y la escolaridad de ambos cónyuges tiene importancia casi nula (~4). El año del divorcio no aporta nada (0.0), lo que sugiere que la brecha etaria no cambió estructuralmente entre 2010 y 2019 en Guatemala.
+
+
+El Modelo 2 representa una mejora metodológica respecto al Modelo 1 al incorporar validación cruzada para la selección de hiperparámetros. Con mtry=6 seleccionado por CV y ntree=500, el modelo alcanzó 91.1% de accuracy y Kappa de 0.866 en el conjunto de prueba, demostrando buena capacidad de generalización.
+
+## Modelo 3 – Random Forest con bajo número de árboles (ntree = 100)
+
+```{r rf-bajo-ntree}
+set.seed(123)
+
+rf_bajo <- randomForest(
+  diff_edad_cat ~ .,
+  data       = train,
+  ntree      = 100,
+  mtry       = 2,
+  importance = TRUE
+)
+
+print(rf_bajo)
+```
+El error OOB fue de 27.14%, considerablemente más alto que el Modelo 1 (9.5%). La clase más afectada es Moderada con un error de clase del 43.9%, lo que indica que con pocos árboles y mtry bajo, el modelo tiene dificultades para capturar los límites de la categoría intermedia. Similar y Alta tienen errores de clase más manejables (17.9% y 21.2% respectivamente).
+
+```{r rf-bajo-evaluacion}
+pred_bajo <- predict(rf_bajo, newdata = test)
+
+cm_bajo <- confusionMatrix(pred_bajo, test$diff_edad_cat)
+print(cm_bajo)
+```
+El modelo obtuvo 69.9% de accuracy y Kappa de 0.543, un desempeño notablemente inferior a los modelos anteriores. La clase Moderada es la más problemática con sensibilidad de apenas 49.4%, lo que significa que el modelo falla en identificar casi la mitad de los divorcios con diferencia etaria moderada. Similar (79.1%) y Alta (80.0%) se predicen mejor pero siguen siendo inferiores a los modelos 1 y 2. La caída de ~20 puntos porcentuales en accuracy respecto al Modelo 2 evidencia que 100 árboles con mtry=2 es insuficiente para este dataset.
+
+```{r rf-bajo-importancia}
+imp_bajo <- importance(rf_bajo)
+print(imp_bajo)
+
+varImpPlot(rf_bajo,
+           main = "Importancia de variables – RF bajo (ntree=100, mtry=2)")
+```
+A pesar del menor desempeño, el patrón de importancia se conserva: edadhom (MDA=36.0, MDG=241.8) y edadmuj (MDA=33.9, MDG=246.7) dominan ampliamente. La escolaridad de ambos cónyuges tiene importancia baja pero visible, y anio sigue siendo prácticamente irrelevante (MDA=-1.38). 
+
+```{r rf-bajo-error-curve}
+oob_df <- data.frame(
+  ntree = 1:100,
+  OOB   = rf_bajo$err.rate[, "OOB"]
+)
+
+ggplot(oob_df, aes(x = ntree, y = OOB)) +
+  geom_line(color = "#e74c3c", linewidth = 0.8) +
+  labs(
+    title = "Curva de error OOB – RF bajo (ntree=100)",
+    x     = "Número de árboles",
+    y     = "Error OOB"
+  ) +
+  theme_minimal()
+```
+La curva muestra una caída continua y pronunciada durante los primeros 75 árboles, pasando de un error inicial de ~0.44 a ~0.28 al llegar a 100. Crucialmente, la curva no se ha estabilizado al finalizar ya que sigue descendiendo con oscilaciones visibles hasta el árbol 100. Esto confirma que el bosque no convergió y que agregar más árboles seguiría reduciendo el error. 
+
+El Modelo 3 cumple su propósito como modelo de contraste: con ntree=100 y mtry=2 alcanzó apenas 69.9% de accuracy y Kappa de 0.543, el desempeño más bajo de los tres modelos. La caída es especialmente pronunciada en la clase Moderada (sensibilidad 49.4%), que requiere mayor capacidad del bosque para delimitarse correctamente de las categorías adyacentes. El hallazgo más importante de este modelo no es su desempeño sino su curva OOB: al no haberse estabilizado en 100 árboles, demuestra que el número de estimadores es un hiperparámetro crítico para este dataset
+
+## Comparación de los tres modelos
+
+```{r comparacion-tres-modelos}
+resultados <- data.frame(
+  Modelo   = c("M1 – Alto (ntree=700, mtry=5)",
+               "M2 – Tuning CV (ntree=500, mtry óptimo)",
+               "M3 – Bajo (ntree=100, mtry=2)"),
+  Accuracy = c(
+    round(cm_alto$overall["Accuracy"], 4),
+    round(cm_tuned$overall["Accuracy"], 4),
+    round(cm_bajo$overall["Accuracy"], 4)
+  ),
+  Kappa    = c(
+    round(cm_alto$overall["Kappa"], 4),
+    round(cm_tuned$overall["Kappa"], 4),
+    round(cm_bajo$overall["Kappa"], 4)
+  )
+)
+
+print(resultados)
+
+resultados_long <- tidyr::pivot_longer(resultados,
+                                       cols      = c("Accuracy", "Kappa"),
+                                       names_to  = "Metrica",
+                                       values_to = "Valor")
+
+ggplot(resultados_long, aes(x = Modelo, y = Valor, fill = Metrica)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.6) +
+  geom_text(aes(label = round(Valor, 3)),
+            position = position_dodge(width = 0.6),
+            vjust = -0.4, size = 3.5) +
+  scale_fill_manual(values = c("Accuracy" = "#2980b9", "Kappa" = "#27ae60")) +
+  labs(
+    title = "Comparación de Accuracy y Kappa – Tres modelos Random Forest",
+    x     = NULL,
+    y     = "Valor"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 15, hjust = 1))
+```
+La tabla y gráfico comparativo consolidan el desempeño de los tres modelos evaluados sobre el mismo conjunto de prueba, permitiendo una conclusión directa sobre cuál configuración es más adecuada para predecir la diferencia etaria entre cónyuges divorciados en Guatemala del año 2010-2019.
+
+El Modelo 2, con el RF con tuning por cross-validation (ntree=500, mtry=6 óptimo) obtuvo el mejor desempeño con 91.1% de accuracy y Kappa de 0.866, superando al Modelo 1 en 1.77 puntos porcentuales y al Modelo 3 en 21.26 puntos. Su ventaja no es solo numérica: el mtry fue seleccionado con evidencia estadística mediante 5 folds de CV, lo que le otorga mayor respaldo metodológico frente a los otros dos modelos cuyos hiperparámetros fueron definidos manualmente.
+
+Modelo 1 sirvió como baseline sólido. Con 89.4% de accuracy y Kappa de 0.839, el Modelo 1 demuestra que un Random Forest con muchos árboles y mtry alto ya captura bien la estructura del problema incluso sin tuning. La diferencia respecto al Modelo 2 es pequeña, lo que sugiere que este dataset tiene señal predictiva suficientemente clara como para que incluso una configuración no optimizada funcione bien.
+
+Modelo 3 sirvió como evidencia del límite inferior. La caída a 69.9% de accuracy con ntree=100 y mtry=2 no indica que Random Forest sea un algoritmo débil, sino que los hiperparámetros importan. La curva OOB sin estabilizar del Modelo 3 confirma que 100 árboles es insuficiente para que el bosque converja en este dataset.
+
+## Conclusión final
+
+Con base en la comparación de los tres modelos, el Modelo 2 es seleccionado como modelo final por obtener el mayor Accuracy (91.1%) y Kappa (0.866), con hiperparámetros respaldados por validación cruzada de 5 folds. 
 
