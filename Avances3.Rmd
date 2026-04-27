@@ -122,3 +122,73 @@ cat("Numero de atipicos:", atipicos, "\n")
 cat("Porcentaje de atipicos:", round(atipicos / nrow(boxplot_data) * 100, 2), "%\n")
 ```
 El análisis de la variable continua subyacente muestra que la diferencia de edad entre cónyuges tiene una mediana de 3 años (Q1=1, Q3=6, IQR=5), con un límite superior de 13.5 años según el criterio de Tukey. Se identificaron 1,201 observaciones atípicas, correspondientes a parejas con una brecha etaria superior a 13 años. El caso extremo registrado alcanza los 59 años de diferencia. Estos atípicos representan situaciones reales y socialmente relevantes, refiriéndonos a matrimonios con grandes diferencias generacionales, por lo que no se eliminan, sino que quedan capturados en la categoría Alta de la variable respuesta. Random Forest, al ser robusto ante valores extremos, puede manejar estos casos sin necesidad de transformaciones adicionales.
+
+## Conjuntos de entrenamiento y prueba
+
+Para garantizar coherencia con el resto del proyecto, se utilizo una particion 70% entrenamiento / 30% prueba con set.seed(123). Se aplico createDataPartition del paquete caret para realizar un muestreo estratificado por diff_edad_cat, asegurando que la proporcion de cada clase se preserve en ambos conjuntos.
+
+Las variables predictoras seleccionadas son: edad del hombre, edad de la mujer, escolaridad de ambos conyuges, departamento de registro y anio(año) de registro.
+
+```{r preprocesamiento-modelo}
+datos_modelo <- divorcios %>%
+  select(diff_edad_cat, edadhom, edadmuj, escohom, escomuj, depreg, anio) %>%
+  mutate(
+    edadhom = as.numeric(edadhom),
+    edadmuj = as.numeric(edadmuj),
+    escohom = as.numeric(escohom),
+    escomuj = as.numeric(escomuj),
+    depreg  = as.numeric(as.factor(depreg)),
+    anio    = as.numeric(anio)
+  ) %>%
+  drop_na()
+
+cat("Observaciones disponibles para modelado:", nrow(datos_modelo), "\n")
+```
+
+```{r particion}
+set.seed(123)
+idx   <- createDataPartition(datos_modelo$diff_edad_cat, p = 0.70, list = FALSE)
+train <- datos_modelo[idx, ]
+test  <- datos_modelo[-idx, ]
+
+cat("Entrenamiento:", nrow(train), "observaciones\n")
+cat("Prueba       :", nrow(test),  "observaciones\n\n")
+
+cat("Distribucion en ENTRENAMIENTO:\n")
+print(round(prop.table(table(train$diff_edad_cat)) * 100, 2))
+cat("\nDistribucion en PRUEBA:\n")
+print(round(prop.table(table(test$diff_edad_cat)) * 100, 2))
+```
+
+
+```{r grafico-balance}
+balance_df <- rbind(
+  data.frame(Conjunto  = "Entrenamiento",
+             Categoria = names(table(train$diff_edad_cat)),
+             N         = as.integer(table(train$diff_edad_cat))),
+  data.frame(Conjunto  = "Prueba",
+             Categoria = names(table(test$diff_edad_cat)),
+             N         = as.integer(table(test$diff_edad_cat)))
+)
+
+ggplot(balance_df, aes(x = Categoria, y = N, fill = Conjunto)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.6) +
+  geom_text(aes(label = N), position = position_dodge(width = 0.6),
+            vjust = -0.4, size = 3.5) +
+  scale_fill_manual(values = c("Entrenamiento" = "#2980b9", "Prueba" = "#e67e22")) +
+  labs(title = "Balance de clases en entrenamiento y prueba",
+       x = "Categoria de diferencia de edad", y = "Numero de observaciones") +
+  theme_minimal()
+```
+
+## Algoritmo seleccionado: Random Forest
+
+Random Forest fue seleccionado como primer algoritmo por su capacidad para capturar relaciones no lineales entre variables sociodemograficas, su robustez ante valores atipicos y la posibilidad de estimar importancia de variables. A diferencia de SVM o regresion logistica, no requiere normalizacion ni escalado, lo que simplifica el preprocesamiento.
+
+Las transformaciones realizadas fueron: conversion de todas las variables a tipo numerico, codificacion numerica de depreg como factor, y eliminacion de filas con NA. No se aplico escalado ya que Random Forest es invariante a la escala de las variables.
+
+
+## Modelos Random Forest
+
+Solo asegurense de explicar el tipo de modelo que están usando: Se pueden entrenar tres modelos variando ntree (numero de arboles) y mtry (variables candidatas por nodo), los dos hiperparametros principales de Random Forest. Podría ser uno base con 100 arboles digamos, otro con aún más arboles y otro que tengo pocos (unos 20 o 50 digamos)
+
