@@ -192,3 +192,33 @@ Las transformaciones realizadas fueron: conversion de todas las variables a tipo
 
 Solo asegurense de explicar el tipo de modelo que están usando: Se pueden entrenar tres modelos variando ntree (numero de arboles) y mtry (variables candidatas por nodo), los dos hiperparametros principales de Random Forest. Podría ser uno base con 100 arboles digamos, otro con aún más arboles y otro que tengo pocos (unos 20 o 50 digamos)
 
+## Modelo Random Forest – Alto número de árboles (ntree = 500)
+
+### Primer modelo de random forest
+Modelo de random forest con ntree = 700 y mtry = 5
+```{r rf-alto-ntree}
+set.seed(123)
+
+rf_alto <- randomForest(
+  diff_edad_cat ~ .,
+  data       = train,
+  ntree      = 700,
+  mtry       = 5,
+  importance = TRUE
+)
+
+print(rf_alto)
+```
+
+```{r rf-alto-evaluacion}
+pred_alto <- predict(rf_alto, newdata = test)
+
+cm_alto <- confusionMatrix(pred_alto, test$diff_edad_cat)
+print(cm_alto)
+```
+
+```{r rf-alto-importancia}
+importance(rf_alto)
+```
+El modelo con 700 árboles y mtry=5 logró un accuracy del 89.4% y un Kappa de 0.839, lo que indica que el modelo predice bastante bien las tres categorías. El error OOB fue de 9.5%, casi igual al error en prueba, lo que confirma que no hay sobreajuste. La clase más difícil de predecir fue Moderada, algo esperado porque es la categoría intermedia. Las variables más importantes fueron las edades de ambos cónyuges, seguidas por el departamento de registro.
+
