@@ -250,6 +250,25 @@ importance(rf_alto)
 ```
 El modelo con 700 árboles y mtry=5 logró un accuracy del 89.4% y un Kappa de 0.839, lo que indica que el modelo predice bastante bien las tres categorías. El error OOB fue de 9.5%, casi igual al error en prueba, lo que confirma que no hay sobreajuste. La clase más difícil de predecir fue Moderada, algo esperado porque es la categoría intermedia. Las variables más importantes fueron las edades de ambos cónyuges, seguidas por el departamento de registro.
 
+## Análisis de sobreajuste
+```{r sobreajuste}
+acc_train <- mean(predict(rf_alto, newdata = train) == train$diff_edad_cat)
+acc_test  <- cm_alto$overall["Accuracy"]
+
+sobreajuste <- data.frame(
+  Conjunto   = c("Entrenamiento", "Prueba"),
+  Accuracy   = round(c(acc_train, acc_test), 4)
+)
+
+knitr::kable(sobreajuste,
+             caption = "Comparacion de accuracy: entrenamiento vs prueba")
+
+cat("Gap (Train - Test):", round(acc_train - acc_test, 4), "\n")
+```
+El modelo presenta Accuracy de 1.0000 en entrenamiento y 0.8937 en prueba, con un gap de 0.1063. Un accuracy perfecto en train es una señal clara de que el modelo memorizó los datos de entrenamiento. Sin embargo, el accuracy en prueba sigue siendo alto (89.37%), lo que indica que el sobreajuste es moderado y no crítico — el modelo aún generaliza bien a datos nuevos.
+Este comportamiento es aceptable en Random Forest con parámetros agresivos (ntree=700, mtry=5): al tener muchos árboles y acceso a muchas variables por nodo, el ensemble tiende a ajustarse perfectamente al entrenamiento. Para reducir este gap se puede disminuir mtry, reducir ntree o limitar la profundidad de los árboles mediante maxnodes. El tuneo con validación cruzada que se realiza a continuación busca precisamente encontrar el balance óptimo entre ajuste y generalización.
+
+
 ## Modelo 2 – Random Forest con tuning de mtry via cross-validation (caret)
 
 ```{r rf-tuning-cv}
