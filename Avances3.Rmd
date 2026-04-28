@@ -215,6 +215,36 @@ cm_alto <- confusionMatrix(pred_alto, test$diff_edad_cat)
 print(cm_alto)
 ```
 
+```{r rf-alto-cm-grafico}
+cm_alto_df <- as.data.frame(cm_alto$table)
+names(cm_alto_df) <- c("Prediccion", "Referencia", "Frecuencia")
+
+cm_alto_df <- cm_alto_df %>%
+  group_by(Referencia) %>%
+  mutate(Porcentaje = Frecuencia / sum(Frecuencia) * 100) %>%
+  ungroup()
+
+ggplot(cm_alto_df, aes(x = Referencia, y = Prediccion, fill = Porcentaje)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Frecuencia, "\n(", round(Porcentaje, 1), "%)")),
+            size = 4, fontface = "bold") +
+  scale_fill_gradient(low = "#d6eaf8", high = "#1a5276",
+                      name = "% por clase\nreal") +
+  labs(
+    title    = "Matriz de Confusión – Modelo 1 (ntree=700, mtry=5)",
+    subtitle = paste0("Accuracy: ", round(cm_alto$overall["Accuracy"] * 100, 1),
+                      "%  |  Kappa: ", round(cm_alto$overall["Kappa"], 3)),
+    x        = "Clase Real",
+    y        = "Clase Predicha"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(color = "gray40"),
+    legend.position = "right"
+  )
+```
+
 ```{r rf-alto-importancia}
 importance(rf_alto)
 ```
@@ -267,6 +297,35 @@ pred_tuned <- predict(rf_tuned, newdata = test)
 cm_tuned <- confusionMatrix(pred_tuned, test$diff_edad_cat)
 print(cm_tuned)
 ```
+```{r rf-tuned-cm-grafico}
+cm_tuned_df <- as.data.frame(cm_tuned$table)
+names(cm_tuned_df) <- c("Prediccion", "Referencia", "Frecuencia")
+
+cm_tuned_df <- cm_tuned_df %>%
+  group_by(Referencia) %>%
+  mutate(Porcentaje = Frecuencia / sum(Frecuencia) * 100) %>%
+  ungroup()
+
+ggplot(cm_tuned_df, aes(x = Referencia, y = Prediccion, fill = Porcentaje)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Frecuencia, "\n(", round(Porcentaje, 1), "%)")),
+            size = 4, fontface = "bold") +
+  scale_fill_gradient(low = "#d5f5e3", high = "#1e8449",
+                      name = "% por clase\nreal") +
+  labs(
+    title    = "Matriz de Confusión – Modelo 2 (Tuning CV, ntree=500)",
+    subtitle = paste0("Accuracy: ", round(cm_tuned$overall["Accuracy"] * 100, 1),
+                      "%  |  Kappa: ", round(cm_tuned$overall["Kappa"], 3)),
+    x        = "Clase Real",
+    y        = "Clase Predicha"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(color = "gray40"),
+    legend.position = "right"
+  )
+```
 El modelo obtuvo 91.1% de accuracy y Kappa de 0.866, lo que representa un ajuste excelente para una clasificación de tres clases. La clase Moderada presenta la sensibilidad más baja (88.3%), esperable por ser la categoría intermedia con límites menos definidos. Los errores se concentran entre clases adyacentes, no entre extremos.
 
 ```{r rf-tuning-importancia}
@@ -307,6 +366,35 @@ pred_bajo <- predict(rf_bajo, newdata = test)
 
 cm_bajo <- confusionMatrix(pred_bajo, test$diff_edad_cat)
 print(cm_bajo)
+```
+```{r rf-bajo-cm-grafico}
+cm_bajo_df <- as.data.frame(cm_bajo$table)
+names(cm_bajo_df) <- c("Prediccion", "Referencia", "Frecuencia")
+
+cm_bajo_df <- cm_bajo_df %>%
+  group_by(Referencia) %>%
+  mutate(Porcentaje = Frecuencia / sum(Frecuencia) * 100) %>%
+  ungroup()
+
+ggplot(cm_bajo_df, aes(x = Referencia, y = Prediccion, fill = Porcentaje)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Frecuencia, "\n(", round(Porcentaje, 1), "%)")),
+            size = 4, fontface = "bold") +
+  scale_fill_gradient(low = "#fdebd0", high = "#922b21",
+                      name = "% por clase\nreal") +
+  labs(
+    title    = "Matriz de Confusión – Modelo 3 (ntree=100, mtry=2)",
+    subtitle = paste0("Accuracy: ", round(cm_bajo$overall["Accuracy"] * 100, 1),
+                      "%  |  Kappa: ", round(cm_bajo$overall["Kappa"], 3)),
+    x        = "Clase Real",
+    y        = "Clase Predicha"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(color = "gray40"),
+    legend.position = "right"
+  )
 ```
 El modelo obtuvo 69.9% de accuracy y Kappa de 0.543, un desempeño notablemente inferior a los modelos anteriores. La clase Moderada es la más problemática con sensibilidad de apenas 49.4%, lo que significa que el modelo falla en identificar casi la mitad de los divorcios con diferencia etaria moderada. Similar (79.1%) y Alta (80.0%) se predicen mejor pero siguen siendo inferiores a los modelos 1 y 2. La caída de ~20 puntos porcentuales en accuracy respecto al Modelo 2 evidencia que 100 árboles con mtry=2 es insuficiente para este dataset.
 
