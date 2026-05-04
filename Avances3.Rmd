@@ -23,6 +23,7 @@ library(randomForest)
 library(tidyr)
 library(scales)
 library(kableExtra)
+library(xgboost)
 ```
 
 ## Carga y preprocesamiento de datos
