@@ -457,10 +457,6 @@ los construye secuencialmente, donde cada árbol corrige los errores residuales
 del anterior. Esto lo hace especialmente competitivo en datasets con patrones
 complejos y variables de distinta escala.
 
-```{r xgboost-librerias}
-library(xgboost)
-library(Matrix)
-```
 
 ```{r xgboost-preprocesamiento}
 # XGBoost requiere matrices numéricas y etiquetas como enteros 0-indexados
