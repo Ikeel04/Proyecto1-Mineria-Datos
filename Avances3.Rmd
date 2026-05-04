@@ -463,8 +463,8 @@ complejos y variables de distinta escala.
 # XGBoost requiere matrices numéricas y etiquetas como enteros 0-indexados
 label_map <- c("Similar" = 0L, "Moderada" = 1L, "Alta" = 2L)
 
-X_train <- train %>% select(-diff_edad_cat) %>% as.matrix()
-y_train <- label_map[as.character(train$diff_edad_cat)]
+y_train <- as.numeric(as.factor(y_train)) - 1
+y_test  <- as.numeric(as.factor(y_test)) - 1
 
 X_test <- test %>% select(-diff_edad_cat) %>% as.matrix()
 y_test  <- label_map[as.character(test$diff_edad_cat)]
@@ -488,13 +488,14 @@ params_xgb <- list(
   min_child_weight = 5          # regularización
 )
 
-xgb_model <- xgb.train(
-  params    = params_xgb,
-  data      = dtrain,
-  nrounds   = 300,
-  watchlist = list(train = dtrain, test = dtest),
-  verbose   = 1,
-  early_stopping_rounds = 20   # detiene si no mejora en 20 rondas
+cv_model <- xgb.cv(
+  params = params_xgb,
+  data = dtrain,
+  nrounds = 300,
+  nfold = 5,
+  metrics = "mlogloss",
+  early_stopping_rounds = 20,
+  verbose = 1
 )
 
 cat("Mejor ronda:", xgb_model$best_iteration, "\n")
@@ -570,15 +571,13 @@ xgb.plot.importance(
 
 ```{r xgboost-curva-aprendizaje}
 # Extraer historial de mlogloss por ronda
-eval_log <- xgb_model$evaluation_log
+eval_log <- cv_model$evaluation_log
+colnames(eval_log)
 
 ggplot(eval_log, aes(x = iter)) +
-  geom_line(aes(y = train_mlogloss, color = "Entrenamiento"), linewidth = 0.8) +
-  geom_line(aes(y = test_mlogloss,  color = "Prueba"),         linewidth = 0.8) +
-  geom_vline(xintercept = xgb_model$best_iteration,
-             linetype = "dashed", color = "gray50") +
-  scale_color_manual(values = c("Entrenamiento" = "#2980b9",
-                                "Prueba"        = "#6c3483")) +
+  geom_line(aes(y = train_mlogloss_mean, color = "Train")) +
+  geom_line(aes(y = test_mlogloss_mean,  color = "Test")) +
+  theme_minimal()
   labs(
     title  = "Curva de aprendizaje – XGBoost (mlogloss)",
     x      = "Número de rondas (árboles)",
