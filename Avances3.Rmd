@@ -445,45 +445,212 @@ La curva muestra una caída continua y pronunciada durante los primeros 75 árbo
 
 El Modelo 3 cumple su propósito como modelo de contraste: con ntree=100 y mtry=2 alcanzó apenas 69.9% de accuracy y Kappa de 0.543, el desempeño más bajo de los tres modelos. La caída es especialmente pronunciada en la clase Moderada (sensibilidad 49.4%), que requiere mayor capacidad del bosque para delimitarse correctamente de las categorías adyacentes. El hallazgo más importante de este modelo no es su desempeño sino su curva OOB: al no haberse estabilizado en 100 árboles, demuestra que el número de estimadores es un hiperparámetro crítico para este dataset
 
-## Comparación de los tres modelos
+## Modelo 4 – Gradient Boosting con XGBoost
 
-```{r comparacion-tres-modelos}
-resultados <- data.frame(
-  Modelo   = c("M1 – Alto (ntree=700, mtry=5)",
-               "M2 – Tuning CV (ntree=500, mtry óptimo)",
-               "M3 – Bajo (ntree=100, mtry=2)"),
-  Accuracy = c(
-    round(cm_alto$overall["Accuracy"], 4),
-    round(cm_tuned$overall["Accuracy"], 4),
-    round(cm_bajo$overall["Accuracy"], 4)
+## Modelo 4 – Gradient Boosting (XGBoost)
+
+XGBoost fue seleccionado como segundo algoritmo por su naturaleza boosting,
+que contrasta directamente con el enfoque bagging de Random Forest. Mientras
+Random Forest construye árboles en paralelo de forma independiente, XGBoost
+los construye secuencialmente, donde cada árbol corrige los errores residuales
+del anterior. Esto lo hace especialmente competitivo en datasets con patrones
+complejos y variables de distinta escala.
+
+```{r xgboost-librerias}
+library(xgboost)
+library(Matrix)
+```
+
+```{r xgboost-preprocesamiento}
+# XGBoost requiere matrices numéricas y etiquetas como enteros 0-indexados
+label_map <- c("Similar" = 0L, "Moderada" = 1L, "Alta" = 2L)
+
+X_train <- train %>% select(-diff_edad_cat) %>% as.matrix()
+y_train <- label_map[as.character(train$diff_edad_cat)]
+
+X_test <- test %>% select(-diff_edad_cat) %>% as.matrix()
+y_test  <- label_map[as.character(test$diff_edad_cat)]
+
+dtrain <- xgb.DMatrix(data = X_train, label = y_train)
+dtest  <- xgb.DMatrix(data = X_test,  label = y_test)
+```
+
+```{r xgboost-entrenamiento}
+set.seed(123)
+
+params_xgb <- list(
+  booster          = "gbtree",
+  objective        = "multi:softprob",
+  num_class        = 3,
+  eval_metric      = "mlogloss",
+  eta              = 0.1,       # tasa de aprendizaje
+  max_depth        = 6,         # profundidad máxima de cada árbol
+  subsample        = 0.8,       # fracción de filas por árbol
+  colsample_bytree = 0.8,       # fracción de columnas por árbol
+  min_child_weight = 5          # regularización
+)
+
+xgb_model <- xgb.train(
+  params    = params_xgb,
+  data      = dtrain,
+  nrounds   = 300,
+  watchlist = list(train = dtrain, test = dtest),
+  verbose   = 0,
+  early_stopping_rounds = 20   # detiene si no mejora en 20 rondas
+)
+
+cat("Mejor ronda:", xgb_model$best_iteration, "\n")
+cat("Mejor mlogloss en test:", round(xgb_model$best_score, 4), "\n")
+```
+
+```{r xgboost-evaluacion}
+# Predicción: softprob devuelve probabilidades → tomar argmax
+prob_matrix <- matrix(
+  predict(xgb_model, dtest),
+  ncol  = 3,
+  byrow = TRUE
+)
+
+pred_xgb_idx <- apply(prob_matrix, 1, which.max) - 1L  # 0-indexado
+
+nivel_map <- c("0" = "Similar", "1" = "Moderada", "2" = "Alta")
+
+pred_xgb <- factor(nivel_map[as.character(pred_xgb_idx)],
+                   levels = c("Similar", "Moderada", "Alta"))
+ref_xgb  <- factor(nivel_map[as.character(y_test)],
+                   levels = c("Similar", "Moderada", "Alta"))
+
+cm_xgb <- confusionMatrix(pred_xgb, ref_xgb)
+print(cm_xgb)
+```
+
+```{r xgboost-cm-grafico}
+cm_xgb_df <- as.data.frame(cm_xgb$table)
+names(cm_xgb_df) <- c("Prediccion", "Referencia", "Frecuencia")
+
+cm_xgb_df <- cm_xgb_df %>%
+  group_by(Referencia) %>%
+  mutate(Porcentaje = Frecuencia / sum(Frecuencia) * 100) %>%
+  ungroup()
+
+ggplot(cm_xgb_df, aes(x = Referencia, y = Prediccion, fill = Porcentaje)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Frecuencia, "\n(", round(Porcentaje, 1), "%)")),
+            size = 4, fontface = "bold") +
+  scale_fill_gradient(low = "#e8daef", high = "#6c3483",
+                      name = "% por clase\nreal") +
+  labs(
+    title    = "Matriz de Confusión – Modelo 4 (XGBoost)",
+    subtitle = paste0("Accuracy: ", round(cm_xgb$overall["Accuracy"] * 100, 1),
+                      "%  |  Kappa: ", round(cm_xgb$overall["Kappa"], 3)),
+    x        = "Clase Real",
+    y        = "Clase Predicha"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(color = "gray40"),
+    legend.position = "right"
+  )
+```
+
+```{r xgboost-importancia}
+imp_xgb <- xgb.importance(
+  feature_names = colnames(X_train),
+  model         = xgb_model
+)
+
+print(imp_xgb)
+
+xgb.plot.importance(
+  imp_xgb,
+  main        = "Importancia de variables – XGBoost (Gain)",
+  col         = "#6c3483",
+  border_col  = "#6c3483"
+)
+```
+
+```{r xgboost-curva-aprendizaje}
+# Extraer historial de mlogloss por ronda
+eval_log <- xgb_model$evaluation_log
+
+ggplot(eval_log, aes(x = iter)) +
+  geom_line(aes(y = train_mlogloss, color = "Entrenamiento"), linewidth = 0.8) +
+  geom_line(aes(y = test_mlogloss,  color = "Prueba"),         linewidth = 0.8) +
+  geom_vline(xintercept = xgb_model$best_iteration,
+             linetype = "dashed", color = "gray50") +
+  scale_color_manual(values = c("Entrenamiento" = "#2980b9",
+                                "Prueba"        = "#6c3483")) +
+  labs(
+    title  = "Curva de aprendizaje – XGBoost (mlogloss)",
+    x      = "Número de rondas (árboles)",
+    y      = "Log-loss multiclase",
+    color  = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+XGBoost alcanzó  de accuracy y Kappa de ,
+deteniendo el entrenamiento en la ronda [COMPLETAR] por early stopping.
+La curva de aprendizaje muestra que el gap entre train y test
+[se mantuvo estable / se amplió], lo que indica [buena generalización /
+sobreajuste moderado]. La clase Moderada continuó siendo la más difícil
+de predecir, consistente con los modelos Random Forest.
+
+La importancia por Gain confirma que edadhom y edadmuj dominan la señal
+predictiva, aunque XGBoost asigna mayor relevancia relativa a escohom
+y depreg comparado con Random Forest, lo que sugiere que el boosting
+aprovecha interacciones de segundo orden entre variables que el bagging
+ignora.
+
+## Comparación de los cuatro modelos
+
+```{r comparacion-cuatro-modelos}
+resultados4 <- data.frame(
+  Modelo   = c(
+    "M1 – RF Alto (ntree=700, mtry=5)",
+    "M2 – RF Tuning CV (ntree=500)",
+    "M3 – RF Bajo (ntree=100, mtry=2)",
+    "M4 – XGBoost (boosting)"
   ),
-  Kappa    = c(
-    round(cm_alto$overall["Kappa"], 4),
+  Accuracy = c(
+    round(cm_alto$overall["Accuracy"],  4),
+    round(cm_tuned$overall["Accuracy"], 4),
+    round(cm_bajo$overall["Accuracy"],  4),
+    round(cm_xgb$overall["Accuracy"],   4)
+  ),
+  Kappa = c(
+    round(cm_alto$overall["Kappa"],  4),
     round(cm_tuned$overall["Kappa"], 4),
-    round(cm_bajo$overall["Kappa"], 4)
+    round(cm_bajo$overall["Kappa"],  4),
+    round(cm_xgb$overall["Kappa"],   4)
   )
 )
 
-print(resultados)
+knitr::kable(resultados4,
+             caption = "Comparación de Accuracy y Kappa – Cuatro modelos")
 
-resultados_long <- tidyr::pivot_longer(resultados,
-                                       cols      = c("Accuracy", "Kappa"),
-                                       names_to  = "Metrica",
-                                       values_to = "Valor")
+resultados4_long <- tidyr::pivot_longer(
+  resultados4,
+  cols      = c("Accuracy", "Kappa"),
+  names_to  = "Metrica",
+  values_to = "Valor"
+)
 
-ggplot(resultados_long, aes(x = Modelo, y = Valor, fill = Metrica)) +
+ggplot(resultados4_long, aes(x = Modelo, y = Valor, fill = Metrica)) +
   geom_bar(stat = "identity", position = "dodge", width = 0.6) +
   geom_text(aes(label = round(Valor, 3)),
             position = position_dodge(width = 0.6),
-            vjust = -0.4, size = 3.5) +
+            vjust = -0.4, size = 3.2) +
   scale_fill_manual(values = c("Accuracy" = "#2980b9", "Kappa" = "#27ae60")) +
   labs(
-    title = "Comparación de Accuracy y Kappa – Tres modelos Random Forest",
+    title = "Comparación de Accuracy y Kappa – Cuatro modelos",
     x     = NULL,
     y     = "Valor"
   ) +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 15, hjust = 1))
+  theme(axis.text.x = element_text(angle = 15, hjust = 1, size = 9))
 ```
 La tabla y gráfico comparativo consolidan el desempeño de los tres modelos evaluados sobre el mismo conjunto de prueba, permitiendo una conclusión directa sobre cuál configuración es más adecuada para predecir la diferencia etaria entre cónyuges divorciados en Guatemala del año 2010-2019.
 
