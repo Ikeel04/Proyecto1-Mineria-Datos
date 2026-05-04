@@ -33,32 +33,39 @@ library(kableExtra)
 ```{r carga-datos}
 archivos <- list.files("./datos/", pattern = "divorcios.*\\.sav$", full.names = TRUE)
 
-# Función auxiliar: elimina manualmente etiquetas y clases de SPSS introducidas
-# por haven::read_sav. Equivale a haven::zap_labels() pero no depende de su
-# disponibilidad en la versión instalada del paquete haven.
-strip_haven_attrs <- function(df) {
-  df[] <- lapply(df, function(col) {
-    attr(col, "label")         <- NULL
-    attr(col, "labels")        <- NULL
-    attr(col, "format.spss")   <- NULL
-    attr(col, "display_width") <- NULL
-    if (inherits(col, "haven_labelled")) {
-      col <- unclass(col)
-    }
-    col
-  })
-  df
-}
-
+# Estrategia robusta de carga de archivos SPSS:
+# 1) Leer con haven::read_sav (devuelve tibble con columnas haven_labelled).
+# 2) Coercer a data.frame plano para evitar quirks de tibble.
+# 3) Coercer cada columna a character con un bucle explícito.
+#    as.character() aplicado a una columna haven_labelled extrae los valores
+#    subyacentes y descarta la clase, equivalente al efecto de zap_labels()
+#    seguido de as.character() pero sin depender de zap_labels().
+# 4) Estandarizar nombres con clean_names() y agregar el año del archivo.
 divorcios <- map_df(archivos, function(x) {
   df <- haven::read_sav(x, user_na = TRUE)
-  df <- strip_haven_attrs(df)
+  df <- as.data.frame(df)
+  for (j in seq_along(df)) {
+    df[[j]] <- as.character(df[[j]])
+  }
   df <- janitor::clean_names(df)
-  df[] <- lapply(df, as.character)
   df$anio <- stringr::str_extract(basename(x), "\\d{4}")
   return(df)
 })
 
+# Verificación defensiva: garantizar que las columnas requeridas existen.
+# Si los archivos vienen con nombres inesperados, esto fallará con un mensaje
+# claro en lugar de un error críptico aguas abajo.
+columnas_requeridas <- c("edadhom", "edadmuj", "escohom", "escomuj", "depreg")
+faltantes <- setdiff(columnas_requeridas, names(divorcios))
+if (length(faltantes) > 0) {
+  stop("Columnas requeridas no encontradas tras carga: ",
+       paste(faltantes, collapse = ", "),
+       ". Columnas disponibles: ",
+       paste(names(divorcios), collapse = ", "))
+}
+
+# Conversión de tipos: type.convert intenta inferir el tipo numérico cuando
+# corresponde, dejando como character lo que no se puede convertir.
 divorcios <- divorcios %>%
   mutate(across(everything(), ~ type.convert(.x, as.is = TRUE)))
 
@@ -533,13 +540,21 @@ params_base <- list(
 )
 
 # Función auxiliar para evaluar un modelo XGBoost
+# IMPORTANTE: en xgboost >= 1.7, predict() para multi:softprob devuelve
+# directamente una matriz (n x num_class). En versiones antiguas devuelve un
+# vector plano en orden row-major. Se manejan ambos casos para evitar
+# reshapes erróneos que mezclan las probabilidades entre observaciones.
 eval_xgb <- function(modelo, dmat, y_real_factor) {
   pred_prob <- predict(modelo, dmat)
-  prob_mat  <- matrix(pred_prob, ncol = 3, byrow = TRUE)
-  pred_idx  <- apply(prob_mat, 1, which.max) - 1L
-  niveles   <- c("Similar", "Moderada", "Alta")
-  pred_fac  <- factor(niveles[pred_idx + 1L], levels = niveles)
-  cm        <- confusionMatrix(pred_fac, y_real_factor)
+  if (is.matrix(pred_prob)) {
+    prob_mat <- pred_prob
+  } else {
+    prob_mat <- matrix(pred_prob, ncol = 3, byrow = TRUE)
+  }
+  pred_idx <- apply(prob_mat, 1, which.max) - 1L
+  niveles  <- c("Similar", "Moderada", "Alta")
+  pred_fac <- factor(niveles[pred_idx + 1L], levels = niveles)
+  cm       <- confusionMatrix(pred_fac, y_real_factor)
   list(pred = pred_fac, cm = cm)
 }
 
