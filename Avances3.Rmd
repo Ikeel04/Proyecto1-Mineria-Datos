@@ -460,20 +460,19 @@ complejos y variables de distinta escala.
 
 
 ```{r xgboost-preprocesamiento}
-# XGBoost requiere matrices numéricas y etiquetas como enteros 0-indexados
 label_map <- c("Similar" = 0L, "Moderada" = 1L, "Alta" = 2L)
 
-y_train <- as.numeric(as.factor(y_train)) - 1
-y_test  <- as.numeric(as.factor(y_test)) - 1
+X_train <- train %>% select(-diff_edad_cat) %>% as.matrix()
+X_test  <- test  %>% select(-diff_edad_cat) %>% as.matrix()
 
-X_test <- test %>% select(-diff_edad_cat) %>% as.matrix()
+y_train <- label_map[as.character(train$diff_edad_cat)]
 y_test  <- label_map[as.character(test$diff_edad_cat)]
 
 dtrain <- xgb.DMatrix(data = X_train, label = y_train)
 dtest  <- xgb.DMatrix(data = X_test,  label = y_test)
 ```
 
-```{r xgboost-entrenamiento}
+```{r xgboost-cv}
 set.seed(123)
 
 params_xgb <- list(
@@ -481,36 +480,53 @@ params_xgb <- list(
   objective        = "multi:softprob",
   num_class        = 3,
   eval_metric      = "mlogloss",
-  eta              = 0.1,       # tasa de aprendizaje
-  max_depth        = 6,         # profundidad máxima de cada árbol
-  subsample        = 0.8,       # fracción de filas por árbol
-  colsample_bytree = 0.8,       # fracción de columnas por árbol
-  min_child_weight = 5          # regularización
+  eta              = 0.1,
+  max_depth        = 6,
+  subsample        = 0.8,
+  colsample_bytree = 0.8,
+  min_child_weight = 5
 )
 
 cv_model <- xgb.cv(
-  params = params_xgb,
-  data = dtrain,
-  nrounds = 300,
-  nfold = 5,
-  metrics = "mlogloss",
+  params                = params_xgb,
+  data                  = dtrain,
+  nrounds               = 200,
+  nfold                 = 5,
   early_stopping_rounds = 20,
-  verbose = 1
+  verbose               = 0
 )
 
-cat("Mejor ronda:", xgb_model$best_iteration, "\n")
-cat("Mejor mlogloss en test:", round(as.numeric(xgb_model$best_score), 4), "\n")
+# best_iteration puede ser NULL en algunas versiones; fallback robusto
+best_nrounds <- cv_model$best_iteration
+if (is.null(best_nrounds) || length(best_nrounds) == 0 || best_nrounds == 0) {
+  best_nrounds <- which.min(cv_model$evaluation_log$test_mlogloss_mean)
+}
+
+cat("Mejor ronda (early stopping):", best_nrounds, "\n")
+cat("Mejor mlogloss CV:", round(min(cv_model$evaluation_log$test_mlogloss_mean), 4), "\n")
+```
+
+```{r xgboost-entrenamiento}
+set.seed(123)
+
+xgb_model <- xgb.train(
+  params  = params_xgb,
+  data    = dtrain,
+  nrounds = best_nrounds,
+  verbose = 0
+)
+
+cat("Modelo XGBoost entrenado con", best_nrounds, "rondas.\n")
 ```
 
 ```{r xgboost-evaluacion}
-# Predicción: softprob devuelve probabilidades → tomar argmax
 prob_matrix <- matrix(
   predict(xgb_model, dtest),
   ncol  = 3,
   byrow = TRUE
 )
 
-pred_xgb_idx <- apply(prob_matrix, 1, which.max) - 1L  # 0-indexado
+pred_xgb_idx <- apply(prob_matrix, 1, which.max) - 1L
 
 nivel_map <- c("0" = "Similar", "1" = "Moderada", "2" = "Alta")
 
@@ -570,14 +586,11 @@ xgb.plot.importance(
 ```
 
 ```{r xgboost-curva-aprendizaje}
-# Extraer historial de mlogloss por ronda
 eval_log <- cv_model$evaluation_log
-colnames(eval_log)
 
 ggplot(eval_log, aes(x = iter)) +
   geom_line(aes(y = train_mlogloss_mean, color = "Train")) +
   geom_line(aes(y = test_mlogloss_mean,  color = "Test")) +
-  theme_minimal()
   labs(
     title  = "Curva de aprendizaje – XGBoost (mlogloss)",
     x      = "Número de rondas (árboles)",
@@ -588,67 +601,6 @@ ggplot(eval_log, aes(x = iter)) +
   theme(legend.position = "top")
 ```
 
-XGBoost alcanzó  de accuracy y Kappa de ,
-deteniendo el entrenamiento en la ronda [COMPLETAR] por early stopping.
-La curva de aprendizaje muestra que el gap entre train y test
-[se mantuvo estable / se amplió], lo que indica [buena generalización /
-sobreajuste moderado]. La clase Moderada continuó siendo la más difícil
-de predecir, consistente con los modelos Random Forest.
-
-La importancia por Gain confirma que edadhom y edadmuj dominan la señal
-predictiva, aunque XGBoost asigna mayor relevancia relativa a escohom
-y depreg comparado con Random Forest, lo que sugiere que el boosting
-aprovecha interacciones de segundo orden entre variables que el bagging
-ignora.
-
-## Comparación de los cuatro modelos
-
-```{r comparacion-cuatro-modelos}
-resultados4 <- data.frame(
-  Modelo   = c(
-    "M1 – RF Alto (ntree=700, mtry=5)",
-    "M2 – RF Tuning CV (ntree=500)",
-    "M3 – RF Bajo (ntree=100, mtry=2)",
-    "M4 – XGBoost (boosting)"
-  ),
-  Accuracy = c(
-    round(cm_alto$overall["Accuracy"],  4),
-    round(cm_tuned$overall["Accuracy"], 4),
-    round(cm_bajo$overall["Accuracy"],  4),
-    round(cm_xgb$overall["Accuracy"],   4)
-  ),
-  Kappa = c(
-    round(cm_alto$overall["Kappa"],  4),
-    round(cm_tuned$overall["Kappa"], 4),
-    round(cm_bajo$overall["Kappa"],  4),
-    round(cm_xgb$overall["Kappa"],   4)
-  )
-)
-
-knitr::kable(resultados4,
-             caption = "Comparación de Accuracy y Kappa – Cuatro modelos")
-
-resultados4_long <- tidyr::pivot_longer(
-  resultados4,
-  cols      = c("Accuracy", "Kappa"),
-  names_to  = "Metrica",
-  values_to = "Valor"
-)
-
-ggplot(resultados4_long, aes(x = Modelo, y = Valor, fill = Metrica)) +
-  geom_bar(stat = "identity", position = "dodge", width = 0.6) +
-  geom_text(aes(label = round(Valor, 3)),
-            position = position_dodge(width = 0.6),
-            vjust = -0.4, size = 3.2) +
-  scale_fill_manual(values = c("Accuracy" = "#2980b9", "Kappa" = "#27ae60")) +
-  labs(
-    title = "Comparación de Accuracy y Kappa – Cuatro modelos",
-    x     = NULL,
-    y     = "Valor"
-  ) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 15, hjust = 1, size = 9))
-```
 La tabla y gráfico comparativo consolidan el desempeño de los tres modelos evaluados sobre el mismo conjunto de prueba, permitiendo una conclusión directa sobre cuál configuración es más adecuada para predecir la diferencia etaria entre cónyuges divorciados en Guatemala del año 2010-2019.
 
 El Modelo 2, con el RF con tuning por cross-validation (ntree=500, mtry=6 óptimo) obtuvo el mejor desempeño con 91.1% de accuracy y Kappa de 0.866, superando al Modelo 1 en 1.77 puntos porcentuales y al Modelo 3 en 21.26 puntos. Su ventaja no es solo numérica: el mtry fue seleccionado con evidencia estadística mediante 5 folds de CV, lo que le otorga mayor respaldo metodológico frente a los otros dos modelos cuyos hiperparámetros fueron definidos manualmente.
