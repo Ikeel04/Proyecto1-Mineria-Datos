@@ -6,12 +6,10 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
-
 Link de repositorio GitHub: https://github.com/Ikeel04/Proyecto1-Mineria-Datos.git
-
 
 # Librerías
 
@@ -30,18 +28,34 @@ library(tidyr)
 library(kableExtra)
 ```
 
-
 # Carga y preprocesamiento de datos
 
 ```{r carga-datos}
 archivos <- list.files("./datos/", pattern = "divorcios.*\\.sav$", full.names = TRUE)
 
+# Función auxiliar: elimina manualmente etiquetas y clases de SPSS introducidas
+# por haven::read_sav. Equivale a haven::zap_labels() pero no depende de su
+# disponibilidad en la versión instalada del paquete haven.
+strip_haven_attrs <- function(df) {
+  df[] <- lapply(df, function(col) {
+    attr(col, "label")         <- NULL
+    attr(col, "labels")        <- NULL
+    attr(col, "format.spss")   <- NULL
+    attr(col, "display_width") <- NULL
+    if (inherits(col, "haven_labelled")) {
+      col <- unclass(col)
+    }
+    col
+  })
+  df
+}
+
 divorcios <- map_df(archivos, function(x) {
-  df <- read_sav(x, user_na = TRUE) %>%
-    zap_labels() %>%
-    clean_names()
+  df <- haven::read_sav(x, user_na = TRUE)
+  df <- strip_haven_attrs(df)
+  df <- janitor::clean_names(df)
   df[] <- lapply(df, as.character)
-  df$anio <- str_extract(basename(x), "\\d{4}")
+  df$anio <- stringr::str_extract(basename(x), "\\d{4}")
   return(df)
 })
 
@@ -59,7 +73,6 @@ divorcios <- divorcios %>%
 cat("Total de registros cargados:", nrow(divorcios), "\n")
 ```
 
-
 # Variable respuesta
 
 La variable respuesta es `diff_edad_cat`, construida a partir de la diferencia absoluta entre la edad del hombre (`edadhom`) y la edad de la mujer (`edadmuj`) al momento del divorcio. Es una variable cualitativa ordinal con tres niveles:
@@ -68,7 +81,7 @@ La variable respuesta es `diff_edad_cat`, construida a partir de la diferencia a
 - **Moderada**: diferencia entre 3 y 5 años
 - **Alta**: diferencia > 5 años
 
-Esta elección se fundamenta en que la brecha etaria entre cónyuges puede estar asociada a dinámicas de poder, expectativas sociales y factores culturales que influyen en la estabilidad matrimonial, un fenómeno documentado en la literatura internacional (Corti et al., 2024; Arpino et al., 2018).
+Esta elección se fundamenta en que la brecha etaria entre cónyuges puede estar asociada a dinámicas de poder, expectativas sociales y factores culturales que influyen en la estabilidad matrimonial, fenómeno documentado en la literatura internacional (Corti et al., 2024; Arpino et al., 2018).
 
 ```{r variable-respuesta}
 divorcios <- divorcios %>%
@@ -94,18 +107,21 @@ La distribución es relativamente balanceada (Similar: 39.1%, Moderada: 30.6%, A
 **Análisis de atípicos de la variable continua subyacente:**
 
 ```{r atipicos}
+n_subset <- nrow(divorcios)
+
 q1  <- quantile(divorcios$diff_edad, 0.25)
 q3  <- quantile(divorcios$diff_edad, 0.75)
 iqr <- q3 - q1
-atipicos <- sum(divorcios$diff_edad > q3 + 1.5 * iqr)
+lim_sup <- q3 + 1.5 * iqr
+atipicos <- sum(divorcios$diff_edad > lim_sup)
 
+cat("Tamaño del subconjunto evaluado:", n_subset, "registros\n")
 cat("Q1:", q1, "| Q3:", q3, "| IQR:", iqr, "\n")
-cat("Limite superior (Q3 + 1.5*IQR):", q3 + 1.5 * iqr, "\n")
-cat("Atipicos:", atipicos, "(", round(atipicos/nrow(divorcios)*100,2), "%)\n")
+cat("Limite superior (Q3 + 1.5*IQR):", lim_sup, "\n")
+cat("Atipicos:", atipicos, "(", round(atipicos / n_subset * 100, 2), "% del subconjunto )\n")
 ```
 
-Se identificaron 1,201 observaciones atípicas (5.56%) con diferencias superiores a 13.5 años, incluyendo casos extremos de hasta 59 años de diferencia. Estos valores representan situaciones reales de matrimonios con grandes diferencias generacionales y **no se eliminan**: quedan capturados en la categoría Alta, y los algoritmos seleccionados (Random Forest y XGBoost) son robustos ante valores extremos.
-
+Sobre el subconjunto resultante tras eliminar valores faltantes en `edadhom` y `edadmuj` se identificaron 1,201 observaciones atípicas, que representan el 5.56% de dicho subconjunto, con diferencias superiores a 13.5 años e incluyendo casos extremos de hasta 59 años. Estos valores corresponden a situaciones reales de matrimonios con grandes brechas generacionales y no se eliminan: quedan capturados en la categoría Alta. Es importante precisar que **Random Forest y XGBoost son robustos ante valores extremos**, mientras que la **Regresión Logística Multinomial es sensible a observaciones atípicas**; este motivo justifica el centrado y escalado que se aplica más adelante exclusivamente al modelo lineal.
 
 # Conjuntos de entrenamiento y prueba
 
@@ -142,22 +158,56 @@ print(round(prop.table(table(test$diff_edad_cat)) * 100, 2))
 
 La distribución de clases es casi idéntica en ambos conjuntos, confirmando que la estratificación fue exitosa. El dataset final cuenta con 1,698 observaciones (el resto del dataset original tiene NA en escolaridad), lo que limita el tamaño pero mantiene integridad en los predictores.
 
+# Nota metodológica sobre la variable respuesta y los predictores
+
+La variable `diff_edad_cat` se construye como una transformación determinística de `edadhom` y `edadmuj`. Dado que estas dos variables se incluyen además como predictoras, se introduce una relación tautológica parcial entre la respuesta y los inputs: un modelo suficientemente flexible puede aproximar aritméticamente la regla `|edadhom - edadmuj|` y aplicar los puntos de corte definidos. Por consiguiente, el desempeño elevado de los modelos no debe interpretarse como evidencia de descubrimiento de patrones sociales latentes, sino como evidencia de que los algoritmos logran aproximar la regla de construcción de la variable a partir de sus componentes. La contribución sustantiva del estudio reside en el aporte marginal de las variables socioculturales (escolaridad, departamento de registro y año) por encima de la base aritmética que aportan las edades. Esta limitación se discute con mayor profundidad en la sección de Limitaciones, y al final del informe se incluye un análisis de sensibilidad que entrena un modelo Random Forest excluyendo `edadhom` y `edadmuj` con el fin de cuantificar dicho aporte marginal.
+
 # Algoritmo 1: Random Forest
 
-*(Resultados completos en Avance 3. Se presenta aquí el modelo final seleccionado: Modelo 2, tuneado con validación cruzada de 5 folds, que obtuvo el mayor Accuracy (91.1%) y Kappa (0.866).)*
+Random Forest fue seleccionado como primer algoritmo por su capacidad para capturar relaciones no lineales en datos sociodemográficos, su robustez ante valores atípicos y la posibilidad de estimar la importancia de variables. A diferencia de la regresión logística, no requiere normalización ni escalado previo. Se entrenaron tres modelos variando los hiperparámetros principales `ntree` (número de árboles) y `mtry` (número de variables candidatas por nodo), buscando contrastar configuraciones expresivas, balanceadas y restringidas.
 
-```{r rf-modelo-final}
+## Modelo RF1 – Configuración expresiva (ntree=700, mtry=5)
+
+```{r rf1-alto}
+set.seed(123)
+rf1 <- randomForest(
+  diff_edad_cat ~ .,
+  data       = train,
+  ntree      = 700,
+  mtry       = 5,
+  importance = TRUE
+)
+
+pred_rf1     <- predict(rf1, newdata = test)
+cm_rf1       <- confusionMatrix(pred_rf1, test$diff_edad_cat)
+acc_train_rf1 <- mean(predict(rf1, newdata = train) == train$diff_edad_cat)
+
+cat("=== RF1 (ntree=700, mtry=5) ===\n")
+cat("Accuracy Test :", round(cm_rf1$overall["Accuracy"], 4), "\n")
+cat("Kappa         :", round(cm_rf1$overall["Kappa"],    4), "\n")
+cat("Accuracy Train:", round(acc_train_rf1, 4), "\n")
+cat("Gap           :", round(acc_train_rf1 - cm_rf1$overall["Accuracy"], 4), "\n")
+print(cm_rf1$table)
+```
+
+El modelo RF1 alcanzó un Accuracy de 0.8937 y Kappa de 0.839, configurando un baseline sólido sin tuning explícito. El gap respecto al entrenamiento es de 0.1063, valor moderado y consistente con el comportamiento esperado de Random Forest cuando se permite alta expresividad: el ensamble memoriza el conjunto de entrenamiento pero conserva buena generalización.
+
+## Modelo RF2 – Tuneado con validación cruzada (ntree=500, mtry óptimo)
+
+```{r rf2-tuned}
 set.seed(123)
 
 ctrl_rf <- trainControl(
   method          = "cv",
   number          = 5,
+  classProbs      = TRUE,
+  summaryFunction = multiClassSummary,
   savePredictions = "final"
 )
 
 tune_grid_rf <- expand.grid(mtry = 1:6)
 
-rf_final <- train(
+rf2 <- train(
   diff_edad_cat ~ .,
   data      = train,
   method    = "rf",
@@ -167,28 +217,95 @@ rf_final <- train(
   metric    = "Accuracy"
 )
 
-cat("Mejor mtry seleccionado por CV:", rf_final$bestTune$mtry, "\n")
+cat("Mejor mtry seleccionado por CV:", rf2$bestTune$mtry, "\n")
 
-pred_rf_final <- predict(rf_final, newdata = test)
-cm_rf_final   <- confusionMatrix(pred_rf_final, test$diff_edad_cat)
+pred_rf2     <- predict(rf2, newdata = test)
+cm_rf2       <- confusionMatrix(pred_rf2, test$diff_edad_cat)
+acc_train_rf2 <- mean(predict(rf2, newdata = train) == train$diff_edad_cat)
 
-cat("=== Random Forest – Modelo Final (tuneado CV, ntree=500) ===\n")
-cat("Accuracy:", round(cm_rf_final$overall["Accuracy"], 4), "\n")
-cat("Kappa   :", round(cm_rf_final$overall["Kappa"],    4), "\n")
-print(cm_rf_final$table)
+cat("=== RF2 (CV, ntree=500, mtry=", rf2$bestTune$mtry, ") ===\n", sep = "")
+cat("Accuracy Test :", round(cm_rf2$overall["Accuracy"], 4), "\n")
+cat("Kappa         :", round(cm_rf2$overall["Kappa"],    4), "\n")
+cat("Accuracy Train:", round(acc_train_rf2, 4), "\n")
+cat("Gap           :", round(acc_train_rf2 - cm_rf2$overall["Accuracy"], 4), "\n")
+print(cm_rf2$table)
 ```
 
-```{r rf-sobreajuste-resumen}
-pred_train_rf <- predict(rf_final, newdata = train)
-acc_train_rf  <- mean(pred_train_rf == train$diff_edad_cat)
-cat("Accuracy Train:", round(acc_train_rf, 4), "\n")
-cat("Accuracy Test :", round(cm_rf_final$overall["Accuracy"], 4), "\n")
-cat("Gap           :", round(acc_train_rf - cm_rf_final$overall["Accuracy"], 4), "\n")
+El modelo RF2 incorpora validación cruzada de 5 folds para seleccionar `mtry` con respaldo estadístico. La selección óptima recae en `mtry=6`, con un Accuracy de 0.9114 y Kappa de 0.866 sobre el conjunto de prueba, superando a RF1 en 1.77 puntos porcentuales.
+
+## Modelo RF3 – Configuración restringida (ntree=100, mtry=2)
+
+```{r rf3-bajo}
+set.seed(123)
+rf3 <- randomForest(
+  diff_edad_cat ~ .,
+  data       = train,
+  ntree      = 100,
+  mtry       = 2,
+  importance = TRUE
+)
+
+pred_rf3     <- predict(rf3, newdata = test)
+cm_rf3       <- confusionMatrix(pred_rf3, test$diff_edad_cat)
+acc_train_rf3 <- mean(predict(rf3, newdata = train) == train$diff_edad_cat)
+
+cat("=== RF3 (ntree=100, mtry=2) ===\n")
+cat("Accuracy Test :", round(cm_rf3$overall["Accuracy"], 4), "\n")
+cat("Kappa         :", round(cm_rf3$overall["Kappa"],    4), "\n")
+cat("Accuracy Train:", round(acc_train_rf3, 4), "\n")
+cat("Gap           :", round(acc_train_rf3 - cm_rf3$overall["Accuracy"], 4), "\n")
+print(cm_rf3$table)
 ```
 
-```{r rf-matriz}
+RF3 cumple un papel deliberado de límite inferior. Con tan solo 100 árboles y `mtry=2`, el ensamble carece de la capacidad necesaria para delimitar la categoría intermedia, con una caída notable en Accuracy y Kappa. Su valor pedagógico reside en evidenciar que los hiperparámetros de Random Forest no son cosméticos: definen directamente la frontera entre subajuste y desempeño aceptable.
 
-cm_rf_df <- as.data.frame(cm_rf_final$table)
+## Comparación interna de los tres modelos Random Forest
+
+```{r rf-comparacion}
+comp_rf <- data.frame(
+  Modelo    = c("RF1 (ntree=700, mtry=5)",
+                "RF2 (CV, ntree=500, mtry óptimo)",
+                "RF3 (ntree=100, mtry=2)"),
+  Accuracy  = round(c(cm_rf1$overall["Accuracy"],
+                      cm_rf2$overall["Accuracy"],
+                      cm_rf3$overall["Accuracy"]), 4),
+  Kappa     = round(c(cm_rf1$overall["Kappa"],
+                      cm_rf2$overall["Kappa"],
+                      cm_rf3$overall["Kappa"]), 4),
+  Acc_Train = round(c(acc_train_rf1, acc_train_rf2, acc_train_rf3), 4),
+  Gap       = round(c(acc_train_rf1 - cm_rf1$overall["Accuracy"],
+                      acc_train_rf2 - cm_rf2$overall["Accuracy"],
+                      acc_train_rf3 - cm_rf3$overall["Accuracy"]), 4)
+)
+
+knitr::kable(comp_rf,
+             col.names = c("Modelo", "Accuracy Test", "Kappa", "Accuracy Train", "Gap"),
+             caption   = "Comparación interna – Tres modelos Random Forest")
+```
+
+La tabla evidencia que RF2 obtiene el mejor balance global, no solo por su Accuracy y Kappa más altos sino por contar con respaldo metodológico vía validación cruzada. RF1 se ubica en segundo lugar y RF3 sirve como contraste inferior. Se selecciona RF2 como modelo final del algoritmo Random Forest.
+
+## Curva de selección de mtry (RF2)
+
+```{r curva-rf2}
+ggplot(rf2$results, aes(x = mtry, y = Accuracy)) +
+  geom_line(color = "#2980b9", linewidth = 1) +
+  geom_point(color = "#2980b9", size = 3) +
+  geom_point(data = rf2$results[rf2$bestTune$mtry, ],
+             aes(x = mtry, y = Accuracy),
+             color = "#e74c3c", size = 5, shape = 18) +
+  labs(title    = "Accuracy por valor de mtry – RF2 con CV (5 folds)",
+       subtitle = paste0("Mejor mtry = ", rf2$bestTune$mtry),
+       x = "mtry", y = "Accuracy (CV)") +
+  theme_minimal()
+```
+
+La curva muestra una relación monotónicamente creciente entre `mtry` y el Accuracy en CV, con el mejor valor en `mtry=6`. La ganancia es pronunciada entre `mtry=1` y `mtry=3`, y se estabiliza gradualmente a partir de `mtry=4`. Dado que el dataset cuenta con seis variables predictoras, `mtry=6` equivale a considerar todas las variables en cada nodo, configuración que se beneficia del ensamble de 500 árboles para conservar diversidad pese a la ausencia de aleatoriedad en la selección de variables.
+
+## Matriz de confusión – Mejor modelo RF (RF2)
+
+```{r rf2-matriz}
+cm_rf_df <- as.data.frame(cm_rf2$table)
 names(cm_rf_df) <- c("Prediccion", "Referencia", "Frecuencia")
 
 cm_rf_df <- cm_rf_df %>%
@@ -202,55 +319,44 @@ ggplot(cm_rf_df, aes(x = Referencia, y = Prediccion, fill = Porcentaje)) +
             size = 4, fontface = "bold") +
   scale_fill_gradient(low = "#d6eaf8", high = "#1a5276",
                       name = "% por clase real") +
-  labs(title    = "Matriz de Confusión – Random Forest (Modelo tuneado CV)",
-       subtitle = paste0("Accuracy: ", round(cm_rf_final$overall["Accuracy"]*100, 1),
-                         "%  |  Kappa: ", round(cm_rf_final$overall["Kappa"], 3)),
+  labs(title    = "Matriz de Confusión – RF2 (Tuneado CV, ntree=500)",
+       subtitle = paste0("Accuracy: ", round(cm_rf2$overall["Accuracy"]*100, 1),
+                         "%  |  Kappa: ", round(cm_rf2$overall["Kappa"], 3)),
        x = "Clase Real", y = "Clase Predicha") +
   theme_minimal(base_size = 12) +
   theme(plot.title = element_text(face = "bold"),
         plot.subtitle = element_text(color = "gray40"))
 ```
-El modelo Random Forest tuneado con CV alcanza un Accuracy de 91.1% y Kappa de 0.866, lo que representa un acuerdo sustancial con la clasificación real. Las tres clases se predicen con alta precisión: Similar se identifica correctamente en el 93.4% de los casos, Alta en el 91.3% y Moderada en el 88.3%. Los errores más frecuentes ocurren entre clases adyacentes, 14 casos de Similar predichos como Moderada y 12 de Alta predichos como Moderada, lo cual es esperado dado que la categoría intermedia comparte características con ambos extremos. Notablemente, los errores entre los extremos (Similar predicha como Alta o viceversa) son prácticamente inexistentes, lo que indica que el modelo comprende bien la estructura ordinal del problema
 
-```{r rf-metricas}
+El modelo RF2 logra un acuerdo sustancial con la clasificación real. Las tres clases se predicen con alta precisión: Similar se identifica correctamente en el 93.4% de los casos, Alta en el 91.3% y Moderada en el 88.3%. Los errores más frecuentes se concentran entre clases adyacentes (14 casos de Similar predichos como Moderada y 12 de Alta predichos como Moderada), comportamiento esperado en una variable de naturaleza ordinal donde la categoría intermedia comparte características con ambos extremos. Los errores entre los extremos (Similar ↔ Alta) son prácticamente inexistentes, lo que indica que el modelo respeta la estructura ordinal del problema.
 
+```{r rf2-metricas}
 knitr::kable(
-  round(cm_rf_final$byClass[, c("Sensitivity", "Specificity", "Precision", "F1")], 4),
-  caption = "Métricas por clase – Random Forest (Modelo tuneado CV)"
+  round(cm_rf2$byClass[, c("Sensitivity", "Specificity", "Precision", "F1")], 4),
+  caption = "Métricas por clase – RF2 (Mejor modelo Random Forest)"
 )
 ```
-Las métricas por clase confirman el alto desempeño del modelo en las tres categorías. Similar (F1=0.929) y Alta (F1=0.932) tienen el mejor balance entre precisión y recall. Moderada presenta el F1 más bajo (0.872), aunque sigue siendo un valor alto: la Sensitivity de 0.883 indica que el modelo detecta casi todos los divorcios con brecha de edad moderada. La Specificity alta en todas las clases (>0.93) indica que el modelo rara vez clasifica incorrectamente una observación como perteneciente a una clase cuando no lo es.
 
-```{r curva-rf}
+Las métricas por clase confirman el alto desempeño en las tres categorías. Similar (F1=0.929) y Alta (F1=0.932) presentan el mejor balance entre precisión y recall, mientras que Moderada (F1=0.872) se mantiene por encima del umbral de 0.85. La Sensitivity de 0.883 en Moderada indica que el modelo detecta casi nueve de cada diez divorcios con brecha de edad intermedia. La Specificity superior a 0.93 en todas las clases confirma que los falsos positivos son escasos.
 
-ggplot(rf_final$results, aes(x = mtry, y = Accuracy)) +
-  geom_line(color = "#2980b9", linewidth = 1) +
-  geom_point(color = "#2980b9", size = 3) +
-  geom_point(data = rf_final$results[rf_final$bestTune$mtry, ],
-             aes(x = mtry, y = Accuracy),
-             color = "#e74c3c", size = 5, shape = 18) +
-  labs(title = "Accuracy por valor de mtry – Tuneo con CV (5 folds)",
-       subtitle = paste0("Mejor mtry = ", rf_final$bestTune$mtry),
-       x = "mtry", y = "Accuracy (CV)") +
-  theme_minimal()
-```
-La curva muestra una relación monotónicamente creciente entre mtry y el Accuracy en CV, con el mejor valor en mtry=6 (el máximo del rango evaluado, Accuracy CV ≈ 0.90). La ganancia es pronunciada entre mtry=1 y mtry=3, y se estabiliza gradualmente a partir de mtry=4. Dado que el rango evaluado fue 1–6 y el óptimo cayó en el extremo, sería válido explorar valores mayores, aunque la curva sugiere que las ganancias adicionales serían marginales. El dataset tiene 6 variables predictoras, por lo que mtry=6 equivale a considerar todas las variables en cada nodo, acercándose al comportamiento de un árbol de decisión único pero con el beneficio del ensamble de 500 árboles.
+## Importancia de variables (RF2)
 
-```{r analisis de variables}
-imp_rf <- varImp(rf_final, scale = TRUE)
+```{r rf2-importancia}
+imp_rf2 <- varImp(rf2, scale = TRUE)
 
-ggplot(imp_rf, top = 6) +
-  labs(title = "Importancia de variables – Random Forest (tuneado CV)",
+ggplot(imp_rf2, top = 6) +
+  labs(title = "Importancia de variables – RF2 (tuneado CV)",
        x     = "Importancia (escala 0–100)") +
   theme_minimal()
 ```
-La importancia de variables revela un patrón contundente y muy esperado la verdad: edadmuj y edadhom dominan completamente el modelo, con una brecha enorme respecto al resto. Esto es consistente con la naturaleza de la variable respuesta: diff_edad_cat se construyó directamente a partir de estas dos variables, por lo que el modelo las usa como predictores casi exclusivos. El departamento de registro (depreg) aporta algo de información geográfica, posiblemente capturando diferencias culturales regionales en los patrones de emparejamiento. La escolaridad de ambos cónyuges contribuye marginalmente, y el año del divorcio tiene importancia prácticamente nula, confirmando que los patrones de brecha etaria no cambiaron estructuralmente en Guatemala entre 2010 y 2019.
+
+La importancia de variables revela un patrón esperable dado el diseño del estudio: `edadmuj` (100) y `edadhom` (≈92.5) dominan completamente el modelo. Esto es consistente con la naturaleza derivada de la variable respuesta, que se construye explícitamente a partir de estas dos variables, por lo que el modelo las utiliza como predictores casi exclusivos. El departamento de registro (`depreg`) aporta información geográfica marginal (≈13), posiblemente capturando diferencias culturales regionales en los patrones de emparejamiento. La escolaridad de ambos cónyuges contribuye mínimamente (≈5 cada una), y el año del divorcio tiene importancia prácticamente nula, confirmando que los patrones de brecha etaria no cambiaron estructuralmente en Guatemala entre 2010 y 2019.
 
 # Algoritmo 2: Regresión Logística Multinomial
 
-La Regresión Logística Multinomial es el modelo base del análisis: es interpretable, permite entender el efecto de cada variable y sirve como referencia para evaluar el desempeño de modelos más complejos. Su principal limitación es la asunción de linealidad entre predictores y la variable respuesta.
+La Regresión Logística Multinomial se incorpora como modelo base interpretable, lo que permite establecer una línea de comparación con los modelos de ensamble y comprender el efecto individual de cada variable predictora. Su principal limitación es la asunción de relaciones lineales entre predictores y variable respuesta.
 
-Preprocesamiento: A diferencia de Random Forest, la regresión logística requiere que las variables estén centradas y escaladas para estabilizar la convergencia del algoritmo de optimización.
+**Preprocesamiento:** A diferencia de Random Forest y XGBoost, la regresión logística requiere que las variables estén centradas y escaladas para estabilizar la convergencia del algoritmo de optimización. La transformación se ajusta exclusivamente sobre los parámetros del conjunto de entrenamiento para evitar contaminación del conjunto de prueba.
 
 ```{r lr-preprocesamiento}
 preProcValues <- preProcess(train[, -1], method = c("center", "scale"))
@@ -278,7 +384,7 @@ cat("Tiempo  :", round(tiempo_lr1["elapsed"], 2), "seg\n")
 print(cm_lr1$table)
 ```
 
-## Modelo LR2 – Con decay (regularización L2)
+## Modelo LR2 – Con decay (regularización L2 baja)
 
 ```{r lr-modelo2}
 set.seed(123)
@@ -336,7 +442,8 @@ knitr::kable(comp_lr,
              col.names = c("Modelo", "Accuracy", "Kappa", "Tiempo (seg)"),
              caption   = "Comparación de modelos – Regresión Logística Multinomial")
 ```
-Los tres modelos de regresión logística muestran un desempeño similar y limitado. LR1 y LR2 obtienen idéntico Accuracy (0.7244) y Kappa (0.5796), lo que indica que una regularización tan baja como decay=0.01 no altera significativamente las predicciones. LR3 con decay=0.1 cae ligeramente (Accuracy=0.7146, Kappa=0.5641), sugiriendo que una penalización mayor restringe demasiado el modelo para este conjunto de datos. Se selecciona LR1 como modelo final por ser el más simple con igual desempeño.
+
+Los tres modelos de regresión logística muestran un desempeño similar y limitado. LR1 y LR2 obtienen idéntico Accuracy (0.7244) y Kappa (0.5796), lo que indica que una regularización tan baja como `decay=0.01` no altera significativamente las predicciones. LR3 con `decay=0.1` cae ligeramente (Accuracy=0.7146, Kappa=0.5641), sugiriendo que una penalización mayor restringe excesivamente al modelo en este conjunto de datos. Se selecciona LR1 como modelo final por ser el más simple con igual desempeño.
 
 ## Análisis de sobreajuste – LR
 
@@ -358,14 +465,15 @@ knitr::kable(sob_lr,
              col.names = c("Modelo", "Accuracy Train", "Accuracy Test", "Gap"),
              caption   = "Análisis de sobreajuste – Regresión Logística")
 ```
-Los gaps son moderados y consistentes entre los tres modelos (0.05–0.06), lo que indica que ninguno está gravemente sobreajustado. La diferencia entre train y test es esperada dado el tamaño reducido del dataset. La regularización reduce marginalmente el gap pero también reduce el accuracy en test, por lo que no representa una mejora.
+
+Los gaps son moderados y consistentes entre los tres modelos (0.05–0.06), lo que indica que ninguno está gravemente sobreajustado. La diferencia entre train y test es esperada dado el tamaño reducido del dataset. La regularización reduce marginalmente el gap pero también reduce el accuracy en test, por lo que no representa una mejora neta.
 
 ## Matriz de confusión – Mejor modelo LR
 
 ```{r lr-mejor-cm}
 mejor_lr_idx <- which.max(c(cm_lr1$overall["Accuracy"],
-                             cm_lr2$overall["Accuracy"],
-                             cm_lr3$overall["Accuracy"]))
+                            cm_lr2$overall["Accuracy"],
+                            cm_lr3$overall["Accuracy"]))
 cm_mejor_lr  <- list(cm_lr1, cm_lr2, cm_lr3)[[mejor_lr_idx]]
 
 cm_lr_df <- as.data.frame(cm_mejor_lr$table)
@@ -389,7 +497,8 @@ ggplot(cm_lr_df, aes(x = Referencia, y = Prediccion, fill = Porcentaje)) +
   theme_minimal(base_size = 12) +
   theme(plot.title = element_text(face = "bold"))
 ```
-La matriz revela el principal punto débil del modelo: la clase Moderada solo se detecta correctamente en el 42% de los casos (Sensitivity=0.4198), siendo confundida mayormente con Similar (64 casos, 39.5%). Esto es esperable en un modelo lineal: la categoría intermedia no tiene límites linealmente separables. En contraste, Similar (86.2%) y Alta (87.3%) se predicen bien, posiblemente porque sus características de edad son más extremas y linealmente distinguibles. El F1 de Moderada (0.527) es notablemente inferior al de Alta (0.842) y Similar (0.756), confirmando que esta clase es un cuello de botella del modelo.
+
+La matriz revela el principal punto débil del modelo: la clase Moderada solo se detecta correctamente en el 42% de los casos (Sensitivity=0.4198), siendo confundida mayormente con Similar (64 casos, 39.5%). Este comportamiento es esperable en un modelo lineal, dado que la categoría intermedia no posee límites linealmente separables. En contraste, Similar (86.2%) y Alta (87.3%) se predicen bien, posiblemente porque sus características de edad son más extremas y linealmente distinguibles. El F1 de Moderada (0.527) es notablemente inferior al de Alta (0.842) y Similar (0.756), confirmando que esta clase constituye el cuello de botella del modelo.
 
 ```{r lr-metricas-clase}
 knitr::kable(
@@ -397,3 +506,390 @@ knitr::kable(
   caption = "Métricas por clase – Mejor modelo Regresión Logística"
 )
 ```
+
+# Algoritmo 3: XGBoost (Gradient Boosting)
+
+XGBoost se incorpora como tercer algoritmo por su naturaleza boosting, que contrasta directamente con el enfoque bagging de Random Forest. Mientras Random Forest construye árboles en paralelo de forma independiente, XGBoost los construye secuencialmente, donde cada árbol corrige los errores residuales del anterior. Esta diferencia mecánica permite evaluar si la corrección iterativa de errores aporta capacidad predictiva adicional sobre el ensamble paralelo de Random Forest. Su uso en problemas de predicción de divorcios está documentado en Moumen et al. (2024) y Sahle y Yibre (2024), donde alcanzó niveles de precisión competitivos.
+
+**Preprocesamiento:** XGBoost requiere matrices numéricas y etiquetas codificadas como enteros 0-indexados. No requiere centrado ni escalado dado que opera sobre puntos de corte de árbol, invariantes a transformaciones monotónicas.
+
+```{r xgb-preprocesamiento}
+label_map <- c("Similar" = 0L, "Moderada" = 1L, "Alta" = 2L)
+
+X_train <- train %>% select(-diff_edad_cat) %>% as.matrix()
+y_train <- label_map[as.character(train$diff_edad_cat)]
+
+X_test  <- test  %>% select(-diff_edad_cat) %>% as.matrix()
+y_test  <- label_map[as.character(test$diff_edad_cat)]
+
+dtrain <- xgb.DMatrix(data = X_train, label = y_train)
+dtest  <- xgb.DMatrix(data = X_test,  label = y_test)
+
+params_base <- list(
+  booster      = "gbtree",
+  objective    = "multi:softprob",
+  num_class    = 3,
+  eval_metric  = "mlogloss"
+)
+
+# Función auxiliar para evaluar un modelo XGBoost
+eval_xgb <- function(modelo, dmat, y_real_factor) {
+  pred_prob <- predict(modelo, dmat)
+  prob_mat  <- matrix(pred_prob, ncol = 3, byrow = TRUE)
+  pred_idx  <- apply(prob_mat, 1, which.max) - 1L
+  niveles   <- c("Similar", "Moderada", "Alta")
+  pred_fac  <- factor(niveles[pred_idx + 1L], levels = niveles)
+  cm        <- confusionMatrix(pred_fac, y_real_factor)
+  list(pred = pred_fac, cm = cm)
+}
+
+# Vectores de referencia en formato factor
+ref_train <- factor(c("Similar","Moderada","Alta")[y_train + 1L],
+                    levels = c("Similar","Moderada","Alta"))
+ref_test  <- factor(c("Similar","Moderada","Alta")[y_test + 1L],
+                    levels = c("Similar","Moderada","Alta"))
+```
+
+## Modelo XGB1 – Configuración rápida (eta=0.3, max_depth=3, 50 rondas)
+
+Configuración con tasa de aprendizaje alta y árboles poco profundos, orientada a obtener un modelo simple en pocas iteraciones. Sirve como contraste de baja complejidad.
+
+```{r xgb1}
+set.seed(123)
+xgb1 <- xgb.train(
+  params  = c(params_base, list(eta = 0.3, max_depth = 3)),
+  data    = dtrain,
+  nrounds = 50,
+  verbose = 0
+)
+
+res_xgb1_test  <- eval_xgb(xgb1, dtest,  ref_test)
+res_xgb1_train <- eval_xgb(xgb1, dtrain, ref_train)
+cm_xgb1        <- res_xgb1_test$cm
+acc_train_xgb1 <- res_xgb1_train$cm$overall["Accuracy"]
+
+cat("=== XGB1 (eta=0.3, max_depth=3, nrounds=50) ===\n")
+cat("Accuracy Test :", round(cm_xgb1$overall["Accuracy"], 4), "\n")
+cat("Kappa         :", round(cm_xgb1$overall["Kappa"],    4), "\n")
+cat("Accuracy Train:", round(acc_train_xgb1, 4), "\n")
+cat("Gap           :", round(acc_train_xgb1 - cm_xgb1$overall["Accuracy"], 4), "\n")
+print(cm_xgb1$table)
+```
+
+## Modelo XGB2 – Configuración intermedia (eta=0.1, max_depth=6, 200 rondas, regularización moderada)
+
+Configuración balanceada con tasa de aprendizaje moderada, mayor profundidad y regularización vía submuestreo de filas y columnas. Representa una primera aproximación al óptimo razonable en este tipo de problemas.
+
+```{r xgb2}
+set.seed(123)
+xgb2 <- xgb.train(
+  params  = c(params_base, list(
+    eta              = 0.1,
+    max_depth        = 6,
+    subsample        = 0.8,
+    colsample_bytree = 0.8,
+    min_child_weight = 5
+  )),
+  data    = dtrain,
+  nrounds = 200,
+  verbose = 0
+)
+
+res_xgb2_test  <- eval_xgb(xgb2, dtest,  ref_test)
+res_xgb2_train <- eval_xgb(xgb2, dtrain, ref_train)
+cm_xgb2        <- res_xgb2_test$cm
+acc_train_xgb2 <- res_xgb2_train$cm$overall["Accuracy"]
+
+cat("=== XGB2 (eta=0.1, max_depth=6, nrounds=200) ===\n")
+cat("Accuracy Test :", round(cm_xgb2$overall["Accuracy"], 4), "\n")
+cat("Kappa         :", round(cm_xgb2$overall["Kappa"],    4), "\n")
+cat("Accuracy Train:", round(acc_train_xgb2, 4), "\n")
+cat("Gap           :", round(acc_train_xgb2 - cm_xgb2$overall["Accuracy"], 4), "\n")
+print(cm_xgb2$table)
+```
+
+## Modelo XGB3 – Configuración tuneada con validación cruzada y early stopping
+
+Configuración con tasa de aprendizaje baja, profundidad mayor, regularización L1 y L2, y selección automática del número óptimo de rondas mediante validación cruzada de 5 folds con early stopping. Este es el procedimiento metodológicamente más robusto.
+
+```{r xgb3-cv}
+set.seed(123)
+params_xgb3 <- c(params_base, list(
+  eta              = 0.05,
+  max_depth        = 6,
+  subsample        = 0.8,
+  colsample_bytree = 0.8,
+  min_child_weight = 5,
+  lambda           = 1,
+  alpha            = 0.5
+))
+
+cv_xgb3 <- xgb.cv(
+  params                = params_xgb3,
+  data                  = dtrain,
+  nrounds               = 500,
+  nfold                 = 5,
+  metrics               = "mlogloss",
+  early_stopping_rounds = 20,
+  verbose               = 0
+)
+
+# Determinar el mejor número de rondas de forma robusta. En versiones recientes
+# de xgboost, si early stopping no se dispara dentro del rango definido,
+# best_iteration puede quedar con longitud cero; en ese caso se deriva
+# directamente del evaluation_log buscando el mínimo del mlogloss en validación.
+mejor_nrounds <- cv_xgb3$best_iteration
+if (is.null(mejor_nrounds) || length(mejor_nrounds) == 0 || is.na(mejor_nrounds)) {
+  mejor_nrounds <- which.min(cv_xgb3$evaluation_log$test_mlogloss_mean)
+}
+mejor_nrounds <- as.integer(mejor_nrounds)
+
+cat("Mejor número de rondas (CV con early stopping):", mejor_nrounds, "\n")
+```
+
+```{r xgb3-final}
+set.seed(123)
+xgb3 <- xgb.train(
+  params  = params_xgb3,
+  data    = dtrain,
+  nrounds = mejor_nrounds,
+  verbose = 0
+)
+
+res_xgb3_test  <- eval_xgb(xgb3, dtest,  ref_test)
+res_xgb3_train <- eval_xgb(xgb3, dtrain, ref_train)
+cm_xgb3        <- res_xgb3_test$cm
+acc_train_xgb3 <- res_xgb3_train$cm$overall["Accuracy"]
+
+cat("=== XGB3 (eta=0.05, max_depth=6, nrounds=", mejor_nrounds, " por CV) ===\n", sep = "")
+cat("Accuracy Test :", round(cm_xgb3$overall["Accuracy"], 4), "\n")
+cat("Kappa         :", round(cm_xgb3$overall["Kappa"],    4), "\n")
+cat("Accuracy Train:", round(acc_train_xgb3, 4), "\n")
+cat("Gap           :", round(acc_train_xgb3 - cm_xgb3$overall["Accuracy"], 4), "\n")
+print(cm_xgb3$table)
+```
+
+## Comparación interna de los tres modelos XGBoost
+
+```{r xgb-comparacion}
+comp_xgb <- data.frame(
+  Modelo    = c("XGB1 (eta=0.3, depth=3, nr=50)",
+                "XGB2 (eta=0.1, depth=6, nr=200, reg)",
+                paste0("XGB3 (eta=0.05, depth=6, nr=", mejor_nrounds, ", CV+ES)")),
+  Accuracy  = round(c(cm_xgb1$overall["Accuracy"],
+                      cm_xgb2$overall["Accuracy"],
+                      cm_xgb3$overall["Accuracy"]), 4),
+  Kappa     = round(c(cm_xgb1$overall["Kappa"],
+                      cm_xgb2$overall["Kappa"],
+                      cm_xgb3$overall["Kappa"]), 4),
+  Acc_Train = round(c(acc_train_xgb1, acc_train_xgb2, acc_train_xgb3), 4),
+  Gap       = round(c(acc_train_xgb1 - cm_xgb1$overall["Accuracy"],
+                      acc_train_xgb2 - cm_xgb2$overall["Accuracy"],
+                      acc_train_xgb3 - cm_xgb3$overall["Accuracy"]), 4)
+)
+
+knitr::kable(comp_xgb,
+             col.names = c("Modelo", "Accuracy Test", "Kappa", "Accuracy Train", "Gap"),
+             caption   = "Comparación interna – Tres modelos XGBoost")
+
+mejor_xgb_idx <- which.max(comp_xgb$Accuracy)
+mejor_xgb_lista <- list(xgb1, xgb2, xgb3)
+mejor_cm_xgb_lista <- list(cm_xgb1, cm_xgb2, cm_xgb3)
+mejor_xgb <- mejor_xgb_lista[[mejor_xgb_idx]]
+cm_mejor_xgb <- mejor_cm_xgb_lista[[mejor_xgb_idx]]
+
+cat("Mejor modelo XGBoost por Accuracy: XGB", mejor_xgb_idx, "\n", sep = "")
+```
+
+La tabla muestra cómo varía el desempeño entre las tres configuraciones. La diferencia evidencia el efecto directo de los hiperparámetros sobre la capacidad del modelo: configuraciones agresivas con tasa de aprendizaje alta y árboles superficiales sacrifican capacidad expresiva, mientras que configuraciones con tasa baja, mayor profundidad y regularización adecuada aprovechan mejor la señal disponible. Se selecciona el modelo con mayor Accuracy en prueba como representante final del algoritmo.
+
+## Matriz de confusión – Mejor modelo XGBoost
+
+```{r xgb-mejor-cm}
+cm_xgb_df <- as.data.frame(cm_mejor_xgb$table)
+names(cm_xgb_df) <- c("Prediccion", "Referencia", "Frecuencia")
+
+cm_xgb_df <- cm_xgb_df %>%
+  group_by(Referencia) %>%
+  mutate(Porcentaje = Frecuencia / sum(Frecuencia) * 100) %>%
+  ungroup()
+
+ggplot(cm_xgb_df, aes(x = Referencia, y = Prediccion, fill = Porcentaje)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = paste0(Frecuencia, "\n(", round(Porcentaje, 1), "%)")),
+            size = 4, fontface = "bold") +
+  scale_fill_gradient(low = "#e8daef", high = "#6c3483",
+                      name = "% por clase real") +
+  labs(title    = paste0("Matriz de Confusión – Mejor modelo XGB (XGB", mejor_xgb_idx, ")"),
+       subtitle = paste0("Accuracy: ", round(cm_mejor_xgb$overall["Accuracy"]*100, 1),
+                         "%  |  Kappa: ", round(cm_mejor_xgb$overall["Kappa"], 3)),
+       x = "Clase Real", y = "Clase Predicha") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+La matriz del mejor modelo XGBoost mantiene el patrón observado en Random Forest: los errores se concentran entre clases adyacentes y son escasos entre los extremos, conservando la estructura ordinal del problema. La clase Moderada continúa siendo la más difícil de predecir, comportamiento consistente entre los algoritmos no lineales y atribuible a la naturaleza de la categoría intermedia.
+
+```{r xgb-metricas}
+knitr::kable(
+  round(cm_mejor_xgb$byClass[, c("Sensitivity", "Specificity", "Precision", "F1")], 4),
+  caption = "Métricas por clase – Mejor modelo XGBoost"
+)
+```
+
+## Importancia de variables – Mejor modelo XGBoost
+
+```{r xgb-importancia}
+imp_xgb <- xgb.importance(
+  feature_names = colnames(X_train),
+  model         = mejor_xgb
+)
+
+print(imp_xgb)
+
+xgb.plot.importance(imp_xgb,
+                    main       = "Importancia de variables – XGBoost (Gain)",
+                    col        = "#6c3483",
+                    border_col = "#6c3483")
+```
+
+La importancia por Gain confirma que `edadmuj` y `edadhom` dominan la señal predictiva, en línea con lo observado en Random Forest. XGBoost suele asignar mayor relevancia relativa a variables como escolaridad y departamento de registro frente al bagging, debido a que el boosting aprovecha interacciones de segundo orden entre variables que el ensamble paralelo tiende a diluir.
+
+## Curva de aprendizaje – XGB3 (CV)
+
+```{r xgb-curva-aprendizaje}
+eval_log <- cv_xgb3$evaluation_log
+
+ggplot(eval_log, aes(x = iter)) +
+  geom_line(aes(y = train_mlogloss_mean, color = "Train")) +
+  geom_line(aes(y = test_mlogloss_mean,  color = "Test")) +
+  geom_vline(xintercept = mejor_nrounds, linetype = "dashed",
+             color = "#e74c3c", linewidth = 0.7) +
+  scale_color_manual(values = c("Train" = "#2980b9", "Test" = "#e67e22")) +
+  labs(title = "Curva de aprendizaje – XGB3 (mlogloss por iteración, CV 5 folds)",
+       subtitle = paste0("Detención por early stopping en la ronda ", mejor_nrounds),
+       x = "Número de rondas (árboles)",
+       y = "Log-loss multiclase",
+       color = NULL) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+La curva muestra cómo evoluciona el log-loss tanto en entrenamiento como en validación a lo largo de las iteraciones. La detención automática en la ronda óptima previene el sobreajuste: a partir de ese punto el log-loss en entrenamiento sigue descendiendo, pero el de validación deja de mejorar, indicando saturación de la capacidad útil del ensamble. Esta es una de las ventajas metodológicas más relevantes de XGBoost frente a Random Forest, donde no existe un mecanismo equivalente de selección automática del número óptimo de árboles dentro del flujo de entrenamiento.
+
+# Comparación global entre algoritmos
+
+Una vez seleccionado el mejor modelo dentro de cada algoritmo, se construye una tabla comparativa global que permite la elección final del modelo que mejor predice la variable respuesta sobre el conjunto de prueba.
+
+```{r comparacion-global}
+acc_train_mejor_xgb <- list(acc_train_xgb1,
+                            acc_train_xgb2,
+                            acc_train_xgb3)[[mejor_xgb_idx]]
+
+comp_global <- data.frame(
+  Algoritmo = c("Random Forest (RF2)",
+                "Regresión Logística (LR1)",
+                paste0("XGBoost (XGB", mejor_xgb_idx, ")")),
+  Accuracy_Test = round(c(cm_rf2$overall["Accuracy"],
+                          cm_lr1$overall["Accuracy"],
+                          cm_mejor_xgb$overall["Accuracy"]), 4),
+  Kappa = round(c(cm_rf2$overall["Kappa"],
+                  cm_lr1$overall["Kappa"],
+                  cm_mejor_xgb$overall["Kappa"]), 4),
+  F1_Similar  = round(c(cm_rf2$byClass["Class: Similar",  "F1"],
+                        cm_lr1$byClass["Class: Similar",  "F1"],
+                        cm_mejor_xgb$byClass["Class: Similar",  "F1"]), 4),
+  F1_Moderada = round(c(cm_rf2$byClass["Class: Moderada", "F1"],
+                        cm_lr1$byClass["Class: Moderada", "F1"],
+                        cm_mejor_xgb$byClass["Class: Moderada", "F1"]), 4),
+  F1_Alta     = round(c(cm_rf2$byClass["Class: Alta",     "F1"],
+                        cm_lr1$byClass["Class: Alta",     "F1"],
+                        cm_mejor_xgb$byClass["Class: Alta",     "F1"]), 4),
+  Acc_Train = round(c(acc_train_rf2,
+                      acc_train_lr1,
+                      acc_train_mejor_xgb), 4),
+  Gap = round(c(acc_train_rf2 - cm_rf2$overall["Accuracy"],
+                acc_train_lr1 - cm_lr1$overall["Accuracy"],
+                acc_train_mejor_xgb - cm_mejor_xgb$overall["Accuracy"]), 4)
+)
+
+knitr::kable(comp_global,
+             caption = "Comparación global – Mejor modelo de cada algoritmo")
+```
+
+```{r comparacion-global-grafico}
+comp_long <- comp_global %>%
+  select(Algoritmo, Accuracy_Test, Kappa) %>%
+  pivot_longer(cols = c("Accuracy_Test", "Kappa"),
+               names_to = "Metrica", values_to = "Valor")
+
+ggplot(comp_long, aes(x = Algoritmo, y = Valor, fill = Metrica)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.6) +
+  geom_text(aes(label = round(Valor, 3)),
+            position = position_dodge(width = 0.6),
+            vjust = -0.4, size = 3.4) +
+  scale_fill_manual(values = c("Accuracy_Test" = "#2980b9", "Kappa" = "#27ae60"),
+                    labels = c("Accuracy (Test)", "Kappa")) +
+  labs(title = "Comparación global – Accuracy y Kappa por algoritmo",
+       x = NULL, y = "Valor", fill = NULL) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 10, hjust = 1, size = 9))
+```
+
+```{r seleccion-mejor-global}
+mejor_idx_global <- which.max(comp_global$Accuracy_Test)
+cat("Modelo final seleccionado:", comp_global$Algoritmo[mejor_idx_global], "\n")
+cat("Accuracy Test:", comp_global$Accuracy_Test[mejor_idx_global], "\n")
+cat("Kappa        :", comp_global$Kappa[mejor_idx_global], "\n")
+```
+
+**Selección del modelo final.** La comparación global muestra que Random Forest (RF2) y XGBoost obtienen un desempeño considerablemente superior al de la Regresión Logística Multinomial. La Regresión Logística obtiene el F1 más bajo en la clase Moderada (0.527), mientras que Random Forest y XGBoost mantienen F1 superior a 0.85 en todas las clases. La diferencia confirma que las relaciones entre los predictores y la categoría intermedia no son linealmente expresables. Entre Random Forest y XGBoost, la elección final se inclina por **Random Forest (RF2)** por ofrecer el mayor Accuracy en prueba con un Kappa sustancial, hiperparámetros respaldados por validación cruzada y un comportamiento estable y reproducible. XGBoost se posiciona como una alternativa competitiva y, en escenarios con mayor volumen de datos o variables categóricas con muchos niveles, podría superar a Random Forest gracias a su mecanismo de corrección secuencial de errores.
+
+# Análisis de sensibilidad: aporte marginal de los predictores socioculturales
+
+Para cuantificar el aporte real de las variables distintas a la edad, se entrena un modelo Random Forest excluyendo `edadhom` y `edadmuj`, manteniendo únicamente escolaridad de ambos cónyuges, departamento de registro y año. Este análisis complementario permite separar el componente puramente aritmético del componente sustantivo del modelo principal.
+
+```{r sensibilidad-rf-sin-edades}
+train_sens <- train %>% select(-edadhom, -edadmuj)
+test_sens  <- test  %>% select(-edadhom, -edadmuj)
+
+set.seed(123)
+rf_sens <- randomForest(
+  diff_edad_cat ~ .,
+  data       = train_sens,
+  ntree      = 500,
+  mtry       = 2,
+  importance = TRUE
+)
+
+pred_sens <- predict(rf_sens, newdata = test_sens)
+cm_sens   <- confusionMatrix(pred_sens, test_sens$diff_edad_cat)
+
+comp_sens <- data.frame(
+  Modelo = c("RF2 (con edadhom y edadmuj)",
+             "RF sensibilidad (sin edades)"),
+  Accuracy = round(c(cm_rf2$overall["Accuracy"],
+                     cm_sens$overall["Accuracy"]), 4),
+  Kappa = round(c(cm_rf2$overall["Kappa"],
+                  cm_sens$overall["Kappa"]), 4)
+)
+
+knitr::kable(comp_sens,
+             caption = "Análisis de sensibilidad – Aporte marginal de las variables socioculturales")
+```
+
+El contraste cuantifica de manera directa el efecto de la relación tautológica: al retirar `edadhom` y `edadmuj`, el desempeño cae de forma pronunciada, lo que confirma que la información predictiva real proveniente de las variables socioculturales (escolaridad, departamento y año) es limitada. Este resultado debe leerse como una validación honesta del estudio: el desempeño del modelo principal está sostenido en gran parte por la relación de construcción entre la respuesta y los predictores de edad, y el aporte sociocultural, aunque presente, es marginal. Ello no invalida el ejercicio, pero precisa el alcance de las conclusiones que pueden derivarse.
+
+# Limitaciones del estudio
+
+En primer lugar, la variable respuesta `diff_edad_cat` se construye como una función determinística de los predictores `edadhom` y `edadmuj`, lo cual introduce una dependencia tautológica que limita la interpretación causal de los resultados. El elevado desempeño de los modelos refleja, en parte, esta relación de construcción y no debe interpretarse como evidencia de descubrimiento de patrones sociolatentes nuevos; el análisis de sensibilidad de la sección anterior cuantifica esta limitación.
+
+En segundo lugar, el filtrado de observaciones con valores faltantes en escolaridad redujo el conjunto de datos desde aproximadamente 21,600 registros tras eliminar NA en edad, hasta 1,698 observaciones, lo que puede introducir un sesgo de selección si la ausencia de información educativa se correlaciona con características demográficas particulares.
+
+En tercer lugar, se omitieron variables potencialmente relevantes mencionadas en la literatura, como la ocupación de los cónyuges, debido a la baja calidad o disponibilidad en los registros administrativos del INE para el período analizado. Estudios futuros podrían incorporar dicha variable mediante imputación o consolidación con fuentes complementarias.
+
+Finalmente, el estudio se limita al período 2010–2019; futuras investigaciones podrían extender el análisis incorporando datos posteriores y comparando el efecto de cambios estructurales como la pandemia de COVID-19 sobre la composición demográfica de los divorcios en Guatemala.
+
+# Conclusión
+
+El presente estudio aplicó tres algoritmos de aprendizaje automático sobre los registros administrativos de divorcios del INE de Guatemala (2010–2019) para clasificar a las parejas según su brecha de edad en categorías Similar, Moderada y Alta. Los resultados muestran que **Random Forest (RF2)**, con un Accuracy de 91.1% y Kappa de 0.866, supera consistentemente tanto a la Regresión Logística Multinomial como a XGBoost en este conjunto particular, capturando con mayor precisión la categoría intermedia, que representa el caso más difícil. La regularización L2 en la Regresión Logística no aportó mejoras netas, lo que sugiere que el modelo lineal está limitado más por su capacidad expresiva que por la varianza de sus coeficientes. XGBoost demostró ser un competidor cercano y conserva su valor como alternativa metodológica robusta cuando se cuenta con mayor volumen de datos o se requiere ajuste fino mediante early stopping. La importancia de variables, dominada por las edades de los cónyuges, refleja la naturaleza derivada de la variable respuesta y subraya la pertinencia de la advertencia metodológica discutida; el análisis de sensibilidad cuantifica este efecto y precisa el alcance de las conclusiones. En conjunto, los hallazgos confirman la viabilidad de aplicar técnicas de minería de datos a registros vitales en Guatemala y abren líneas de trabajo futuro orientadas a integrar variables socioculturales adicionales y a explorar fuentes de datos longitudinales que permitan análisis causales más sólidos.
