@@ -493,12 +493,12 @@ xgb_model <- xgb.train(
   data      = dtrain,
   nrounds   = 300,
   watchlist = list(train = dtrain, test = dtest),
-  verbose   = 0,
+  verbose   = 1,
   early_stopping_rounds = 20   # detiene si no mejora en 20 rondas
 )
 
 cat("Mejor ronda:", xgb_model$best_iteration, "\n")
-cat("Mejor mlogloss en test:", round(xgb_model$best_score, 4), "\n")
+cat("Mejor mlogloss en test:", round(as.numeric(xgb_model$best_score), 4), "\n")
 ```
 
 ```{r xgboost-evaluacion}
